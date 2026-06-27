@@ -29,9 +29,6 @@ Upload images and control the display in real time:
 - **Dithering** — eight algorithms: None, Floyd-Steinberg, Atkinson, Stucki, Sierra, Sierra Lite, Burkes, Jarvis-Judice-Ninke
 - **Color schemes** — B/W, B/W+Red, B/W+Yellow, B/W+R+Y, 6-color Spectra, 4-gray, 16-gray
 - **Upload** — raw deflate compressed image sent over BLE in 20-byte chunks with progress indicator
-- **LED Pattern** — brightness, three color slots (RGB, flash count, on/gap timing), outer repeats; built-in presets (Single Flash, Double Flash, Alarm)
-- **Buzzer** — up to four steps per pattern (frequency 0–4000 Hz, duration in 5 ms units), outer repeats; presets (Single, Double, Alarm)
-- **NFC** — write Text, URI, Well-known, MIME, or raw NDEF payloads to an attached NFC tag
 - **Device controls** — Reboot, Deep Sleep, Enter DFU
 - **Debug** — send raw hex BLE commands; recent log entries visible inline
 
@@ -61,13 +58,12 @@ OD App/
 ├── Models/
 │   ├── ConfigModel.swift        ← ODConfigModel (display settings, WiFi, security)
 │   ├── DevicePreset.swift       ← Known hardware dimension presets
-│   ├── LEDPattern.swift         ← LEDColor, LEDPattern, BuzzerStep, BuzzerPattern, NFCPayloadType
 │   └── ImageProcessor.swift     ← Dithering engine, palette quantization, wire-format packing, deflate
 └── Views/
     ├── ScanView.swift           ← BLE scanner, device list, Bluetooth state handling
     ├── DeviceDetailView.swift   ← Tab container (Toolbox | Display | BLE Tester)
     ├── ToolboxView.swift        ← Hardware wizard + full device configuration
-    ├── DisplayToolView.swift    ← Canvas, image upload, LED/buzzer/NFC control
+    ├── DisplayToolView.swift    ← Canvas, image upload, device controls
     ├── BLETesterView.swift      ← Raw BLE command tester
     ├── ODLogoView.swift         ← Reusable logo widget shown in every navigation bar
     └── Components/
