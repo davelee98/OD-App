@@ -33,6 +33,13 @@ struct ODConfigModel: Equatable {
         set { set(type: 32, field: "partial_update_support", value: String(newValue)) }
     }
 
+    /// Bitfield reported by the device: bit0 = streaming decompression support, bit1 = zip support.
+    /// Image uploads may only be deflate-compressed (with a sized Image Start header) when both bits are set —
+    /// otherwise the device expects a bare Image Start opcode followed by raw pixel chunks.
+    var transmissionModes: UInt8 {
+        UInt8(clamping: integer(type: 32, field: "transmission_modes"))
+    }
+
     var deepSleepEnabled: Bool {
         get { integer(type: 4, field: "deep_sleep_time_seconds") > 0 }
         set { set(type: 4, field: "deep_sleep_time_seconds", value: newValue ? "60" : "0") }

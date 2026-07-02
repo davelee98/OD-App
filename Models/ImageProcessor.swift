@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
-import zlib
+import CoreImage
+import CoreImage.CIFilterBuiltins
 
 // MARK: - Dithering Mode
 
@@ -44,6 +45,17 @@ enum ImageProcessor {
         5: [(0,0,0), (85,85,85), (170,170,170), (255,255,255)],              // 4-gray
         6: Array((0..<16).map { i -> RGB in let v = Float(i * 17); return (v,v,v) }),  // 16-gray
     ]
+
+    static func expectedPackedByteCount(width: Int, height: Int, colorScheme: UInt8) -> Int {
+        let pixels = width * height
+        switch colorScheme {
+        case 0: return (pixels + 7) / 8
+        case 1, 2, 5: return ((width + 7) / 8) * height * 2
+        case 3: return (pixels + 3) / 4
+        case 4, 6: return (pixels + 1) / 2
+        default: return (pixels + 7) / 8
+        }
+    }
 
     // MARK: - Main Entry Point
 
@@ -92,33 +104,45 @@ enum ImageProcessor {
         return uiImage(from: pixels, width: width, height: height)
     }
 
-    // MARK: - Deflate Compression (raw deflate, window_bits = -15)
+    // MARK: - Exposure / Brightness / Contrast (Core Image)
 
-    static func deflate(_ data: Data) -> Data? {
-        var stream = z_stream()
-        guard deflateInit2_(&stream, 9, Z_DEFLATED, 9, 8,
-                             Z_DEFAULT_STRATEGY, ZLIB_VERSION,
-                             Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return nil }
-        defer { deflateEnd(&stream) }
+    private static let ciContext = CIContext(options: nil)
 
-        var output = Data()
-        let bufSize = 65536
-        var buffer  = [UInt8](repeating: 0, count: bufSize)
+    /// Apply intuitive photo adjustments *before* dithering. Values are neutral at their defaults
+    /// (`exposureEV` 0, `brightness` 0, `contrast` 1) so an unadjusted image passes through
+    /// unchanged. High-contrast e-ink panels benefit from these before quantization.
+    /// - Parameters:
+    ///   - exposureEV: stops of exposure, roughly -2...+2.
+    ///   - brightness: additive brightness, roughly -0.5...+0.5.
+    ///   - contrast: multiplicative contrast, roughly 0.5...1.5 (1 = unchanged).
+    static func adjust(_ image: UIImage,
+                       exposureEV: Float = 0,
+                       brightness: Float = 0,
+                       contrast: Float = 1) -> UIImage {
+        guard exposureEV != 0 || brightness != 0 || contrast != 1,
+              let cgImage = image.cgImage else { return image }
+        var ci = CIImage(cgImage: cgImage)
 
-        return data.withUnsafeBytes { src in
-            stream.next_in  = UnsafeMutablePointer(mutating: src.bindMemory(to: Bytef.self).baseAddress!)
-            stream.avail_in = uInt(data.count)
-            repeat {
-                buffer.withUnsafeMutableBytes { outputBuffer in
-                    stream.next_out = outputBuffer.bindMemory(to: Bytef.self).baseAddress
-                    stream.avail_out = uInt(bufSize)
-                    zlib.deflate(&stream, Z_FINISH)
-                }
-                let n = bufSize - Int(stream.avail_out)
-                output.append(contentsOf: buffer.prefix(n))
-            } while stream.avail_out == 0
-            return output
+        if exposureEV != 0 {
+            let exposure = CIFilter.exposureAdjust()
+            exposure.inputImage = ci
+            exposure.ev = exposureEV
+            ci = exposure.outputImage ?? ci
         }
+
+        if brightness != 0 || contrast != 1 {
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = ci
+            colorControls.brightness = brightness
+            colorControls.contrast = contrast
+            colorControls.saturation = 1
+            ci = colorControls.outputImage ?? ci
+        }
+
+        guard let out = ciContext.createCGImage(ci, from: CIImage(cgImage: cgImage).extent) else {
+            return image
+        }
+        return UIImage(cgImage: out, scale: image.scale, orientation: image.imageOrientation)
     }
 
     // MARK: - Pixel Helpers
@@ -319,5 +343,22 @@ extension UIImage {
     func orientationNormalized() -> UIImage {
         guard imageOrientation != .up else { return self }
         return UIGraphicsImageRenderer(size: size).image { _ in draw(at: .zero) }
+    }
+
+    /// Downscale so the longest edge is at most `maxDimension` *pixels*, preserving aspect ratio
+    /// (returns self if already within bounds). Used to build a lightweight canvas-preview copy so
+    /// live exposure/brightness/contrast adjustments run Core Image over a small image instead of a
+    /// full-resolution photo — a 12–48MP photo produces a 48–190MB bitmap per render, and dragging
+    /// a slider spawns many of those, which exhausts memory and gets the app killed.
+    func downscaled(maxDimension: CGFloat) -> UIImage {
+        let longest = max(size.width, size.height)
+        guard longest > maxDimension, longest > 0 else { return self }
+        let newSize = CGSize(width: size.width * maxDimension / longest,
+                             height: size.height * maxDimension / longest)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1   // treat newSize as absolute pixels; don't let @2x/@3x scale it back up
+        return UIGraphicsImageRenderer(size: newSize, format: format).image { _ in
+            draw(in: CGRect(origin: .zero, size: newSize))
+        }
     }
 }

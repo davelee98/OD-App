@@ -15,26 +15,36 @@
 		010000000000000000000006 /* ODCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000006 /* ODCommands.swift */; };
 		010000000000000000000007 /* ODAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000007 /* ODAuth.swift */; };
 		010000000000000000000008 /* ODConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000008 /* ODConfig.swift */; };
-		010000000000000000000009 /* ScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000009 /* ScanView.swift */; };
-		01000000000000000000000A /* DeviceDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000A /* DeviceDetailView.swift */; };
-		01000000000000000000000B /* ConfigView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000B /* ConfigView.swift */; };
 		01000000000000000000000C /* BLETesterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000C /* BLETesterView.swift */; };
 		01000000000000000000000D /* DeviceRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000D /* DeviceRowView.swift */; };
 		01000000000000000000000E /* ConfigModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000E /* ConfigModel.swift */; };
 		01000000000000000000000F /* DevicePreset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000F /* DevicePreset.swift */; };
 		010000000000000000000010 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000010 /* CoreBluetooth.framework */; };
 		010000000000000000000011 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000011 /* Security.framework */; };
-		EC7030B92FEF0203009DC919 /* CryptoSwift in Frameworks */ = {isa = PBXBuildFile; productRef = EC7030B82FEF0203009DC919 /* CryptoSwift */; };
 		010000000000000000000020 /* LEDPattern.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000020 /* LEDPattern.swift */; };
 		010000000000000000000021 /* ImageProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000021 /* ImageProcessor.swift */; };
 		010000000000000000000022 /* ToolboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000022 /* ToolboxView.swift */; };
-		010000000000000000000023 /* DisplayToolView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000023 /* DisplayToolView.swift */; };
 		010000000000000000000024 /* ODLogoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000024 /* ODLogoView.swift */; };
 		010000000000000000000025 /* ToolboxData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000025 /* ToolboxData.swift */; };
 		010000000000000000000026 /* AdvertisementData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000026 /* AdvertisementData.swift */; };
 		010000000000000000000030 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000030 /* Assets.xcassets */; };
 		010000000000000000000031 /* simple-config-presets.json in Resources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000031 /* simple-config-presets.json */; };
 		010000000000000000000032 /* toolbox-schema.json in Resources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000032 /* toolbox-schema.json */; };
+		010000000000000000000040 /* DisplayDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000040 /* DisplayDevice.swift */; };
+		010000000000000000000041 /* DisplayCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000041 /* DisplayCanvasView.swift */; };
+		010000000000000000000042 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000042 /* ComposerView.swift */; };
+		010000000000000000000043 /* DisplayDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000043 /* DisplayDetailView.swift */; };
+		010000000000000000000044 /* AdvancedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000044 /* AdvancedView.swift */; };
+		010000000000000000000045 /* CoreBluetoothTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000045 /* CoreBluetoothTransport.swift */; };
+		010000000000000000000046 /* OpenDisplayJSRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000046 /* OpenDisplayJSRuntime.swift */; };
+		010000000000000000000047 /* JavaScriptCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000047 /* JavaScriptCore.framework */; };
+		010000000000000000000048 /* ble-common.js in Resources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000048 /* ble-common.js */; };
+		010000000000000000000049 /* ble-native-bridge.js in Resources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000049 /* ble-native-bridge.js */; };
+		01000000000000000000004A /* ble-app-adapter.js in Resources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000004A /* ble-app-adapter.js */; };
+		01000000000000000000004B /* js-yaml.min.js in Resources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000004B /* js-yaml.min.js */; };
+		01000000000000000000004C /* pako.js in Resources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000004C /* pako.js */; };
+		01000000000000000000004D /* config.yaml in Resources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000004D /* config.yaml */; };
+		EC7030B92FEF0203009DC919 /* CryptoSwift in Frameworks */ = {isa = PBXBuildFile; productRef = EC7030B82FEF0203009DC919 /* CryptoSwift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -46,9 +56,6 @@
 		020000000000000000000006 /* ODCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODCommands.swift; sourceTree = "<group>"; };
 		020000000000000000000007 /* ODAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODAuth.swift; sourceTree = "<group>"; };
 		020000000000000000000008 /* ODConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODConfig.swift; sourceTree = "<group>"; };
-		020000000000000000000009 /* ScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanView.swift; sourceTree = "<group>"; };
-		02000000000000000000000A /* DeviceDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceDetailView.swift; sourceTree = "<group>"; };
-		02000000000000000000000B /* ConfigView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigView.swift; sourceTree = "<group>"; };
 		02000000000000000000000C /* BLETesterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLETesterView.swift; sourceTree = "<group>"; };
 		02000000000000000000000D /* DeviceRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceRowView.swift; sourceTree = "<group>"; };
 		02000000000000000000000E /* ConfigModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigModel.swift; sourceTree = "<group>"; };
@@ -60,13 +67,26 @@
 		020000000000000000000020 /* LEDPattern.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LEDPattern.swift; sourceTree = "<group>"; };
 		020000000000000000000021 /* ImageProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageProcessor.swift; sourceTree = "<group>"; };
 		020000000000000000000022 /* ToolboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolboxView.swift; sourceTree = "<group>"; };
-		020000000000000000000023 /* DisplayToolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayToolView.swift; sourceTree = "<group>"; };
 		020000000000000000000024 /* ODLogoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODLogoView.swift; sourceTree = "<group>"; };
 		020000000000000000000025 /* ToolboxData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolboxData.swift; sourceTree = "<group>"; };
 		020000000000000000000026 /* AdvertisementData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvertisementData.swift; sourceTree = "<group>"; };
 		020000000000000000000030 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		020000000000000000000031 /* simple-config-presets.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "simple-config-presets.json"; sourceTree = "<group>"; };
 		020000000000000000000032 /* toolbox-schema.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "toolbox-schema.json"; sourceTree = "<group>"; };
+		020000000000000000000040 /* DisplayDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayDevice.swift; sourceTree = "<group>"; };
+		020000000000000000000041 /* DisplayCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayCanvasView.swift; sourceTree = "<group>"; };
+		020000000000000000000042 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
+		020000000000000000000043 /* DisplayDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayDetailView.swift; sourceTree = "<group>"; };
+		020000000000000000000044 /* AdvancedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedView.swift; sourceTree = "<group>"; };
+		020000000000000000000045 /* CoreBluetoothTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBluetoothTransport.swift; sourceTree = "<group>"; };
+		020000000000000000000046 /* OpenDisplayJSRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenDisplayJSRuntime.swift; sourceTree = "<group>"; };
+		020000000000000000000047 /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
+		020000000000000000000048 /* ble-common.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "ble-common.js"; sourceTree = "<group>"; };
+		020000000000000000000049 /* ble-native-bridge.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "ble-native-bridge.js"; sourceTree = "<group>"; };
+		02000000000000000000004A /* ble-app-adapter.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "ble-app-adapter.js"; sourceTree = "<group>"; };
+		02000000000000000000004B /* js-yaml.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "js-yaml.min.js"; sourceTree = "<group>"; };
+		02000000000000000000004C /* pako.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = pako.js; sourceTree = "<group>"; };
+		02000000000000000000004D /* config.yaml */ = {isa = PBXFileReference; lastKnownFileType = text; path = config.yaml; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -76,6 +96,7 @@
 			files = (
 				010000000000000000000010 /* CoreBluetooth.framework in Frameworks */,
 				010000000000000000000011 /* Security.framework in Frameworks */,
+				010000000000000000000047 /* JavaScriptCore.framework in Frameworks */,
 				EC7030B92FEF0203009DC919 /* CryptoSwift in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -104,6 +125,7 @@
 			isa = PBXGroup;
 			children = (
 				020000000000000000000003 /* BLEManager.swift */,
+				020000000000000000000045 /* CoreBluetoothTransport.swift */,
 				020000000000000000000004 /* ODConstants.swift */,
 				020000000000000000000005 /* ODDevice.swift */,
 			);
@@ -113,6 +135,7 @@
 		030000000000000000000003 /* Protocol */ = {
 			isa = PBXGroup;
 			children = (
+				020000000000000000000046 /* OpenDisplayJSRuntime.swift */,
 				020000000000000000000006 /* ODCommands.swift */,
 				020000000000000000000007 /* ODAuth.swift */,
 				020000000000000000000008 /* ODConfig.swift */,
@@ -123,12 +146,12 @@
 		030000000000000000000004 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				020000000000000000000009 /* ScanView.swift */,
-				02000000000000000000000A /* DeviceDetailView.swift */,
-				02000000000000000000000B /* ConfigView.swift */,
+				020000000000000000000044 /* AdvancedView.swift */,
+				020000000000000000000043 /* DisplayDetailView.swift */,
+				020000000000000000000042 /* ComposerView.swift */,
+				020000000000000000000041 /* DisplayCanvasView.swift */,
 				02000000000000000000000C /* BLETesterView.swift */,
 				020000000000000000000022 /* ToolboxView.swift */,
-				020000000000000000000023 /* DisplayToolView.swift */,
 				020000000000000000000024 /* ODLogoView.swift */,
 				030000000000000000000005 /* Components */,
 			);
@@ -146,6 +169,7 @@
 		030000000000000000000006 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				020000000000000000000040 /* DisplayDevice.swift */,
 				02000000000000000000000E /* ConfigModel.swift */,
 				02000000000000000000000F /* DevicePreset.swift */,
 				020000000000000000000020 /* LEDPattern.swift */,
@@ -161,6 +185,7 @@
 			children = (
 				020000000000000000000010 /* CoreBluetooth.framework */,
 				020000000000000000000011 /* Security.framework */,
+				020000000000000000000047 /* JavaScriptCore.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -176,6 +201,12 @@
 		030000000000000000000009 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				020000000000000000000048 /* ble-common.js */,
+				020000000000000000000049 /* ble-native-bridge.js */,
+				02000000000000000000004A /* ble-app-adapter.js */,
+				02000000000000000000004B /* js-yaml.min.js */,
+				02000000000000000000004C /* pako.js */,
+				02000000000000000000004D /* config.yaml */,
 				020000000000000000000031 /* simple-config-presets.json */,
 				020000000000000000000032 /* toolbox-schema.json */,
 			);
@@ -189,6 +220,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 060000000000000000000006 /* Build configuration list for PBXNativeTarget "OD App" */;
 			buildPhases = (
+				040000000000000000000004 /* Verify ble-common.js */,
 				040000000000000000000001 /* Sources */,
 				040000000000000000000002 /* Resources */,
 				040000000000000000000003 /* Frameworks */,
@@ -244,6 +276,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				010000000000000000000030 /* Assets.xcassets in Resources */,
+				010000000000000000000048 /* ble-common.js in Resources */,
+				010000000000000000000049 /* ble-native-bridge.js in Resources */,
+				01000000000000000000004A /* ble-app-adapter.js in Resources */,
+				01000000000000000000004B /* js-yaml.min.js in Resources */,
+				01000000000000000000004C /* pako.js in Resources */,
+				01000000000000000000004D /* config.yaml in Resources */,
 				010000000000000000000031 /* simple-config-presets.json in Resources */,
 				010000000000000000000032 /* toolbox-schema.json in Resources */,
 			);
@@ -251,22 +289,46 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		040000000000000000000004 /* Verify ble-common.js */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Resources/ble-common.js",
+				"$(SRCROOT)/scripts/verify-ble-common.sh",
+			);
+			name = "Verify ble-common.js";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "cd \"$SRCROOT\"\nsh scripts/verify-ble-common.sh\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		040000000000000000000001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				010000000000000000000001 /* ODApp.swift in Sources */,
+				010000000000000000000040 /* DisplayDevice.swift in Sources */,
+				010000000000000000000041 /* DisplayCanvasView.swift in Sources */,
+				010000000000000000000042 /* ComposerView.swift in Sources */,
+				010000000000000000000043 /* DisplayDetailView.swift in Sources */,
+				010000000000000000000044 /* AdvancedView.swift in Sources */,
 				010000000000000000000002 /* ContentView.swift in Sources */,
 				010000000000000000000003 /* BLEManager.swift in Sources */,
+				010000000000000000000045 /* CoreBluetoothTransport.swift in Sources */,
 				010000000000000000000004 /* ODConstants.swift in Sources */,
 				010000000000000000000005 /* ODDevice.swift in Sources */,
 				010000000000000000000006 /* ODCommands.swift in Sources */,
+				010000000000000000000046 /* OpenDisplayJSRuntime.swift in Sources */,
 				010000000000000000000007 /* ODAuth.swift in Sources */,
 				010000000000000000000008 /* ODConfig.swift in Sources */,
-				010000000000000000000009 /* ScanView.swift in Sources */,
-				01000000000000000000000A /* DeviceDetailView.swift in Sources */,
-				01000000000000000000000B /* ConfigView.swift in Sources */,
 				01000000000000000000000C /* BLETesterView.swift in Sources */,
 				01000000000000000000000D /* DeviceRowView.swift in Sources */,
 				01000000000000000000000E /* ConfigModel.swift in Sources */,
@@ -274,7 +336,6 @@
 				010000000000000000000020 /* LEDPattern.swift in Sources */,
 				010000000000000000000021 /* ImageProcessor.swift in Sources */,
 				010000000000000000000022 /* ToolboxView.swift in Sources */,
-				010000000000000000000023 /* DisplayToolView.swift in Sources */,
 				010000000000000000000024 /* ODLogoView.swift in Sources */,
 				010000000000000000000025 /* ToolboxData.swift in Sources */,
 				010000000000000000000026 /* AdvertisementData.swift in Sources */,
@@ -403,6 +464,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
@@ -415,6 +477,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.opendisplay.od-app";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -425,6 +488,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
@@ -437,6 +501,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.opendisplay.od-app";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5;
 				TARGETED_DEVICE_FAMILY = "1,2";

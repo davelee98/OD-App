@@ -2,77 +2,10 @@ import Foundation
 
 enum ODCommands {
 
-    // MARK: - Core
-
-    static func reboot() -> Data { OD.Cmd.reboot.header }
-    static func readFirmwareVersion() -> Data { OD.Cmd.readFirmware.header }
-    static func readMSD() -> Data { OD.Cmd.readMSD.header }
-    static func readConfig() -> Data { OD.Cmd.readConfig.header }
-
-    static func writeConfig(_ blob: Data) -> [Data] {
-        if blob.count <= 200 {
-            var packet = OD.Cmd.writeConfigFirst.header
-            packet.append(blob)
-            return [packet]
-        }
-
-        let chunks = blob.chunked(size: 200)
-        return chunks.enumerated().map { index, chunk in
-            var packet = (index == 0 ? OD.Cmd.writeConfigFirst : OD.Cmd.writeConfigChunk).header
-            if index == 0 { packet.appendUInt16LE(UInt16(clamping: blob.count)) }
-            packet.append(chunk)
-            return packet
-        }
-    }
-
-    // MARK: - Auth
-
-    static func authChallenge() -> Data {
-        var p = OD.Cmd.authenticate.header; p.append(0x00); return p
-    }
-
-    static func authProof(clientNonce: Data, challengeResponse: Data) -> Data {
-        var p = OD.Cmd.authenticate.header
-        p.append(clientNonce); p.append(challengeResponse); return p
-    }
-
-    // MARK: - Device Control
+    // `ble-common.js` owns core commands, authentication, config transfer, and image transfer.
+    // These payload helpers remain for controls not exposed as first-class methods by the web library.
 
     static func deepSleep() -> Data { OD.Cmd.deepSleep.header }
-    static func enterDFU() -> Data { OD.Cmd.enterDFU.header }
-
-    // MARK: - Image Transfer
-    // Protocol: imageStart → N × imageData → imageEnd
-
-    static func imageStart(uncompressedSize: UInt32) -> Data {
-        var p = OD.Cmd.imageStart.header
-        p.appendUInt32LE(uncompressedSize)
-        return p
-    }
-
-    static func imageChunk(_ data: Data) -> Data {
-        var p = OD.Cmd.imageData.header; p.append(data); return p
-    }
-
-    static func imageEnd(refreshMode: UInt8 = 0x00) -> Data {
-        var p = OD.Cmd.imageEnd.header; p.append(refreshMode); return p
-    }
-
-    // MARK: - Partial Update
-
-    static func partialUpdate(x: UInt16, y: UInt16, width: UInt16, height: UInt16,
-                              oldEtag: UInt32, newEtag: UInt32, data: Data) -> Data {
-        var p = OD.Cmd.partialUpdate.header
-        p.append(0x00)              // flags
-        p.appendUInt32BE(oldEtag)
-        p.appendUInt32BE(newEtag)
-        p.appendUInt16BE(x)
-        p.appendUInt16BE(y)
-        p.appendUInt16BE(width)
-        p.appendUInt16BE(height)
-        p.append(data)
-        return p
-    }
 
     // MARK: - LED
     // Byte layout:

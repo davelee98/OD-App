@@ -156,6 +156,20 @@ After trusting, re-launch the app from the home screen or press **⌘R** again i
 3. Tap a device to connect; the Toolbox tab opens automatically
 4. Use **Read Config** to pull the current device configuration
 
+### Verbose BLE payload logging
+
+Image-data (`0x71`) payloads and acknowledgements are suppressed by default because a single
+4-gray upload generates hundreds of log entries and can make the UI less responsive. Upload
+start, completion, errors, and other BLE commands remain logged.
+
+To restore detailed payload logging while debugging:
+
+1. In Xcode, choose **Product → Scheme → Edit Scheme…**
+2. Select **Run → Arguments**
+3. Add and enable the launch argument `-BLEVerbosePayloadLogging`
+
+The flag is honored only in Debug builds. Release builds always suppress detailed image payloads.
+
 ---
 
 ## Troubleshooting

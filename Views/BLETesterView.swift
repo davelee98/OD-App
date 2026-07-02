@@ -2,6 +2,7 @@ import SwiftUI
 
 struct BLETesterView: View {
     @ObservedObject var device: ODDevice
+    @EnvironmentObject private var ble: BLEManager
 
     @State private var selectedCommand: OD.Cmd = .readFirmware
     @State private var payloadHex = ""
@@ -74,7 +75,7 @@ struct BLETesterView: View {
                 .disabled(isSending || !isInputValid)
 
                 Button {
-                    device.log.removeAll()
+                    ble.clearLog()
                 } label: {
                     Image(systemName: "trash")
                 }
@@ -92,7 +93,7 @@ struct BLETesterView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(device.log) { entry in
+                    ForEach(ble.log) { entry in
                         LogEntryRow(entry: entry)
                             .id(entry.id)
                     }
@@ -101,8 +102,8 @@ struct BLETesterView: View {
                 .padding(.vertical, 8)
             }
             .background(Color(.systemGroupedBackground))
-            .onChange(of: device.log.count) { _, _ in
-                if let last = device.log.last {
+            .onChange(of: ble.log.count) { _, _ in
+                if let last = ble.log.last {
                     withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                 }
             }
@@ -158,11 +159,13 @@ struct LogEntryRow: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
-                Text(entry.hexString)
-                    .font(.caption2)
-                    .monospaced()
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
+                if !entry.data.isEmpty {
+                    Text(entry.hexString)
+                        .font(.caption2)
+                        .monospaced()
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
+                }
             }
         }
         .padding(.vertical, 4)
@@ -179,12 +182,18 @@ struct LogEntryRow: View {
     }
 
     private var directionColor: Color {
-        entry.direction == .sent ? .blue : .green
+        switch entry.direction {
+        case .sent: .blue
+        case .received: .green
+        case .system: .orange
+        }
     }
 
     private var backgroundColor: Color {
-        entry.direction == .sent
-            ? Color.blue.opacity(0.05)
-            : Color.green.opacity(0.05)
+        switch entry.direction {
+        case .sent: Color.blue.opacity(0.05)
+        case .received: Color.green.opacity(0.05)
+        case .system: Color.orange.opacity(0.07)
+        }
     }
 }

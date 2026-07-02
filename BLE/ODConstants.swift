@@ -72,7 +72,7 @@ struct LogEntry: Identifiable {
     let data: Data
     let label: String?
 
-    enum Direction { case sent, received }
+    enum Direction { case sent, received, system }
 
     var hexString: String {
         data.map { String(format: "%02X", $0) }.joined(separator: " ")

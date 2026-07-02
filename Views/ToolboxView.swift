@@ -295,14 +295,6 @@ struct ToolboxView: View {
                 ShareLink(item: url) { Label("Share Toolbox Setup", systemImage: "square.and.arrow.up") }
             }
 
-            if device != nil, deviceConfigured {
-                NavigationLink {
-                    DisplayToolView()
-                } label: {
-                    Label("Open BLE Tester", systemImage: "photo.on.rectangle")
-                }
-            }
-
             Button("Advanced: Edit Packets") {
                 if simpleSelectionComplete { buildSimpleConfiguration() }
                 mode = .advanced

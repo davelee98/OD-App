@@ -2,3 +2,16 @@
 .DS_Store
 xcuserdata/
 *.xcuserstate
+
+# Local environment and secrets
+.env
+.env.*
+
+# Apple signing and provisioning files
+*.p12
+*.pem
+*.mobileprovision
+
+# Private, machine-specific Xcode configuration
+Local.xcconfig
+Secrets.xcconfig

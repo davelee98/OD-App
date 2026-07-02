@@ -249,6 +249,9 @@ struct ToolboxConfiguration: Codable, Equatable {
     var packets: [ToolboxPacket] = []
     var exportedAt: Date?
     var exportedBy: String?
+    /// Byte-for-byte tail beginning at an unknown packet. Preserved so newer/legacy firmware
+    /// extensions survive a read-edit-write cycle even when this app cannot interpret them.
+    var unknownPacketTail = Data()
 
     enum CodingKeys: String, CodingKey {
         case version, packets
@@ -302,8 +305,9 @@ enum ToolboxPacketCodec {
                 outer.append(encodeField(packet.fields[field.name] ?? "", name: field.name, size: size))
             }
         }
+        outer.append(config.unknownPacketTail)
 
-        // The website computes CRC while length bytes are zero, then patches total length.
+        // Firmware computes CRC while the length bytes are zero, then patches total length.
         let crc = toolboxCRC16CCITT(outer)
         let totalLength = UInt16(clamping: outer.count + 2)
         outer[0] = UInt8(totalLength & 0xff)
@@ -319,7 +323,8 @@ enum ToolboxPacketCodec {
         guard declared == data.count else { throw ToolboxCodecError.invalidLength }
         let storedCRC = UInt16(data[data.count - 2]) | UInt16(data[data.count - 1]) << 8
         var crcInput = Data(data.dropLast(2))
-        crcInput[0] = 0; crcInput[1] = 0
+        crcInput[0] = 0
+        crcInput[1] = 0
         guard toolboxCRC16CCITT(crcInput) == storedCRC else { throw ToolboxCodecError.invalidCRC }
 
         var config = ToolboxConfiguration(version: Int(data[2]), minorVersion: schema.minorVersion)
@@ -328,7 +333,13 @@ enum ToolboxPacketCodec {
             guard offset + 2 <= data.count - 2 else { throw ToolboxCodecError.truncatedPacket }
             let type = Int(data[offset + 1])
             offset += 2 // sequence byte is intentionally regenerated when writing
-            guard let definition = schema.packetTypes[String(type)] else { throw ToolboxCodecError.unknownPacket(type) }
+            guard let definition = schema.packetTypes[String(type)] else {
+                // Packet sizes are schema-defined, so an unknown packet cannot be safely skipped.
+                // Preserve this packet and the remaining tail verbatim, then publish all known
+                // packets decoded before it (including the display packet).
+                config.unknownPacketTail = Data(data[(offset - 2)..<(data.count - 2)])
+                break
+            }
             var values: [String: String] = [:]
             for field in definition.fields {
                 guard let count = field.size.byteCount, offset + count <= data.count - 2 else {

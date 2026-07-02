@@ -2,7 +2,8 @@ import Foundation
 import CoreBluetooth
 import Combine
 
-final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
+/// Observable app-facing device. Core Bluetooth owns the radio; `ble-common.js` owns the protocol.
+final class ODDevice: NSObject, ObservableObject {
     let peripheral: CBPeripheral
 
     @Published var connectionState: ConnectionState = .connecting
@@ -13,7 +14,6 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var isReadingAdvertisement = false
     @Published var isAuthenticated = false
     @Published var config: ODConfigModel?
-    @Published var log: [LogEntry] = []
     @Published var lastError: String?
     @Published var uploadProgress: Double = 0
     @Published var isUploading = false
@@ -29,376 +29,314 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
-    var batteryPercent: Int? {
-        advertisement?.bq27220?.percent
-    }
+    var batteryPercent: Int? { advertisement?.bq27220?.percent }
+    var isCharging: Bool { advertisement?.bq27220?.isCharging ?? false }
 
-    var isCharging: Bool {
-        advertisement?.bq27220?.isCharging ?? false
-    }
-
-    private var characteristic: CBCharacteristic?
+    private let transport: CoreBluetoothTransport
+    private let logHandler: (LogEntry) -> Void
+    private var runtime: OpenDisplayJSRuntime?
     private var msdData: Data?
 
-    private struct PendingCommand {
-        let data: Data
-        let awaitNotification: Bool  // false = complete on write-ack, true = wait for notify
-        let completion: ((Data) -> Void)?
-    }
-    private var queue: [PendingCommand] = []
-    private var inFlight: PendingCommand?
-
-    private var configBuffer = Data()
-    private var configExpectedLength = 0
-
-    init(peripheral: CBPeripheral, initialMSD: Data? = nil) {
+    init(peripheral: CBPeripheral, initialMSD: Data? = nil,
+         logHandler: @escaping (LogEntry) -> Void) {
         self.peripheral = peripheral
+        self.transport = CoreBluetoothTransport(peripheral: peripheral)
+        self.logHandler = logHandler
         super.init()
-        peripheral.delegate = self
+
         if let initialMSD {
             msdData = Data(initialMSD.prefix(16))
             msdHex = msdData?.hexString
             advertisement = try? ODAdvertisementData.parse(initialMSD)
         }
+
+        configureTransport()
+        do {
+            runtime = try OpenDisplayJSRuntime()
+            configureRuntime()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
-    // MARK: - GATT Setup
+    // MARK: - GATT lifecycle
 
-    func discoverServices() { peripheral.discoverServices([OD.serviceUUID]) }
+    func discoverServices() {
+        trace("ODDevice discoverServices; appState=\(connectionState), peripheralState=\(peripheral.state.rawValue), runtimeReady=\(runtime != nil)")
+        guard runtime != nil else {
+            lastError = "ble-common.js runtime is unavailable"
+            connectionState = .failed
+            return
+        }
+        transport.start()
+    }
 
-    // MARK: - Core Commands
+    func didDisconnect() {
+        runtime?.setConnected(false)
+        connectionState = .disconnected
+        isAuthenticated = false
+        isUploading = false
+    }
+
+    private func configureTransport() {
+        transport.onReady = { [weak self] in
+            guard let self else { return }
+            self.trace("GATT ready; changing appState \(self.connectionState) → connected")
+            self.runtime?.setConnected(true)
+            self.connectionState = .connected
+            self.readFirmware()
+        }
+        transport.onNotification = { [weak self] data in
+            guard let self else { return }
+            self.appendLog(direction: .received, data: data, label: self.responseLabel(data))
+            self.runtime?.receiveNotification(data)
+        }
+        transport.onError = { [weak self] message in
+            self?.trace("transport error; changing appState to failed: \(message)")
+            self?.lastError = message
+            self?.connectionState = .failed
+        }
+        transport.onTrace = { [weak self] message in self?.trace(message) }
+    }
+
+    private func configureRuntime() {
+        runtime?.onWrite = { [weak self] data, completion in
+            guard let self else {
+                completion(OpenDisplayJSRuntime.RuntimeError.transportUnavailable)
+                return
+            }
+            self.appendLog(direction: .sent, data: data, label: nil)
+            self.transport.write(data, completion: completion)
+        }
+        runtime?.onEvent = { [weak self] type, payload in
+            self?.handleRuntimeEvent(type: type, payload: payload)
+        }
+    }
+
+    // MARK: - Core commands
 
     func sendRaw(_ data: Data, label: String? = nil, completion: ((Data) -> Void)? = nil) {
-        enqueue(PendingCommand(data: data, awaitNotification: true, completion: completion))
-        appendLog(direction: .sent, data: data, label: label)
+        call("sendHex", arguments: ["hex": data.hexString.replacingOccurrences(of: " ", with: "")]) { result in
+            if case .success = result { completion?(Data()) }
+        }
     }
 
-    func readFirmware() { sendRaw(ODCommands.readFirmwareVersion(), label: "Read Firmware") }
+    func readFirmware() {
+        call("readFirmware") { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let value):
+                let major = (value["major"] as? NSNumber)?.intValue ?? 0
+                let minor = (value["minor"] as? NSNumber)?.intValue ?? 0
+                let sha = value["sha"] as? String ?? ""
+                self.firmwareVersion = sha.isEmpty ? "\(major).\(minor)" : "\(major).\(minor) \(sha)"
+            case .failure(let error):
+                self.lastError = error.localizedDescription
+            }
+        }
+    }
+
     func readMSD() {
         isReadingAdvertisement = true
         advertisementError = nil
-        sendRaw(ODCommands.readMSD(), label: "Read Advertising Data")
+        call("readMsd") { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let value):
+                guard let hex = value["hex"] as? String, let data = Data(hexString: hex) else {
+                    self.advertisementError = "ble-common.js returned invalid advertising data"
+                    self.isReadingAdvertisement = false
+                    return
+                }
+                self.publishAdvertisement(data)
+            case .failure(let error):
+                self.advertisementError = error.localizedDescription
+                self.isReadingAdvertisement = false
+            }
+        }
     }
 
-    /// Accepts manufacturer data obtained directly from a scan advertisement.
     func ingestAdvertisement(_ data: Data) {
         publishAdvertisement(data)
     }
 
     func readConfig() {
-        configBuffer = Data(); configExpectedLength = 0
-        sendRaw(ODCommands.readConfig(), label: "Read Config")
-    }
-
-    func writeConfig(_ model: ODConfigModel, completion: ((Bool) -> Void)? = nil) {
-        let blob = ODConfig.serialize(model)
-        guard !blob.isEmpty else {
-            lastError = "Could not build Toolbox configuration"
-            completion?(false)
-            return
-        }
-        let packets = ODCommands.writeConfig(blob)
-        for (i, pkt) in packets.enumerated() {
-            let label = i == 0 ? "Write Config (first)" : "Write Config (chunk)"
-            appendLog(direction: .sent, data: pkt, label: label)
-            if i == packets.count - 1 {
-                enqueue(PendingCommand(data: pkt, awaitNotification: true) { response in
-                    let succeeded = response.count >= 2 && response[0] == 0x00 && response[1] == 0xCE
-                    DispatchQueue.main.async { completion?(succeeded) }
-                })
-            } else {
-                enqueueNoResponse(pkt)
+        call("readConfig") { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let value):
+                guard let hex = value["hex"] as? String, let bytes = Data(hexString: hex) else {
+                    self.lastError = "ble-common.js returned an invalid configuration"
+                    return
+                }
+                do {
+                    self.config = try ODConfig.parse(bytes)
+                    if let config = self.config {
+                        print("[BLE] config display=\(config.displayWidth)x\(config.displayHeight) " +
+                              "colorScheme=\(config.colorScheme) transmissionModes=0x\(String(format: "%02X", config.transmissionModes))")
+                    }
+                    self.reparseAdvertisement()
+                } catch {
+                    print("[BLE] configuration parsing failed: \(error.localizedDescription)")
+                    self.lastError = "Configuration parsing failed: \(error.localizedDescription)"
+                }
+            case .failure(let error):
+                self.lastError = error.localizedDescription
             }
         }
     }
 
-    func reboot() { sendRaw(ODCommands.reboot(), label: "Reboot") }
+    func writeConfig(_ model: ODConfigModel, completion: ((Bool) -> Void)? = nil) {
+        let data = ODConfig.serialize(model)
+        guard !data.isEmpty else {
+            lastError = "Could not build Toolbox configuration"
+            completion?(false)
+            return
+        }
+        call("writeConfig", arguments: ["hex": data.hexString.replacingOccurrences(of: " ", with: "")]) {
+            [weak self] result in
+            switch result {
+            case .success:
+                self?.config = model
+                completion?(true)
+            case .failure(let error):
+                self?.lastError = error.localizedDescription
+                completion?(false)
+            }
+        }
+    }
 
-    func enterDFU() { sendRaw(ODCommands.enterDFU(), label: "Enter DFU") }
-
+    func reboot() { callIgnoringResult("reboot") }
+    func enterDFU() { callIgnoringResult("bootloader") }
     func sendDeepSleep() { sendRaw(ODCommands.deepSleep(), label: "Deep Sleep") }
 
     // MARK: - Authentication
 
     func authenticate(psk: Data) {
-        sendRaw(ODCommands.authChallenge(), label: "Auth Challenge") { [weak self] response in
-            guard let self else { return }
-            guard response.count >= 23,
-                  response[0] == 0x00, response[1] == 0x50 else {
-                self.lastError = "Auth challenge response malformed"; return
-            }
-            let serverNonce  = Data(response[3..<19])
-            let deviceIDBytes = Data(response[19..<23])
-            let clientNonce  = ODAuth.randomNonce()
-            let proof = ODAuth.challengeResponse(psk: psk, serverNonce: serverNonce,
-                                                  clientNonce: clientNonce, deviceID: deviceIDBytes)
-            self.sendRaw(ODCommands.authProof(clientNonce: clientNonce, challengeResponse: proof),
-                         label: "Auth Proof") { proofResponse in
-                DispatchQueue.main.async {
-                    if proofResponse.count >= 3, proofResponse[0] == 0x00, proofResponse[1] == 0x50 {
-                        self.isAuthenticated = true
-                    } else {
-                        self.lastError = "Authentication failed"
-                    }
-                }
+        guard psk.count == 16 else {
+            lastError = "Authentication key must contain exactly 16 bytes"
+            return
+        }
+        call("authenticate", arguments: ["keyHex": psk.hexString.replacingOccurrences(of: " ", with: "")]) {
+            [weak self] result in
+            switch result {
+            case .success: self?.isAuthenticated = true
+            case .failure(let error):
+                self?.isAuthenticated = false
+                self?.lastError = error.localizedDescription
             }
         }
     }
 
-    // MARK: - LED
+    // MARK: - Device controls
 
     func sendLEDPattern(brightness: Int, colors: [LEDColor], repeats: Int) {
-        let data = ODCommands.ledPattern(brightness: brightness, colors: colors, repeats: repeats)
-        sendRaw(data, label: "LED Pattern")
+        sendRaw(ODCommands.ledPattern(brightness: brightness, colors: colors, repeats: repeats),
+                label: "LED Pattern")
     }
 
     func stopLED() { sendRaw(ODCommands.ledStop(), label: "LED Stop") }
 
-    // MARK: - Buzzer
-
     func sendBuzzerPattern(instance: UInt8 = 0, repeats: Int, steps: [BuzzerStep]) {
-        let data = ODCommands.buzzerPattern(instance: instance, repeats: repeats, steps: steps)
-        sendRaw(data, label: "Buzzer Pattern")
+        sendRaw(ODCommands.buzzerPattern(instance: instance, repeats: repeats, steps: steps),
+                label: "Buzzer Pattern")
     }
-
-    // MARK: - NFC
 
     func writeNFC(type: UInt8, payload: Data) {
-        let nfcChunkSize = 120
-        if payload.count <= nfcChunkSize {
+        let chunkSize = 120
+        if payload.count <= chunkSize {
             sendRaw(ODCommands.nfcWriteSingle(type: type, payload: payload), label: "NFC Write")
-        } else {
-            sendRaw(ODCommands.nfcWriteStart(type: type, totalLength: UInt16(payload.count)),
-                    label: "NFC Write Start")
-            for chunk in payload.chunked(size: nfcChunkSize) {
-                sendRaw(ODCommands.nfcWriteChunk(chunk), label: "NFC Chunk")
-            }
-            sendRaw(ODCommands.nfcWriteEnd(), label: "NFC Write End")
-        }
-    }
-
-    // MARK: - Image Upload
-
-    func uploadImage(pixelData: Data, compressed: Bool = true) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-
-            let payload: Data
-            if compressed, let c = ImageProcessor.deflate(pixelData) {
-                payload = c
-            } else {
-                payload = pixelData
-            }
-
-            DispatchQueue.main.async { self.isUploading = true; self.uploadProgress = 0 }
-
-            // imageStart: uncompressed size only — wait for device 0x70 ACK before sending chunks
-            let startPkt = ODCommands.imageStart(uncompressedSize: UInt32(pixelData.count))
-            self.appendLog(direction: .sent, data: startPkt, label: "Image Start")
-            self.enqueue(PendingCommand(data: startPkt, awaitNotification: true) { [weak self] _ in
-                guard let self else { return }
-
-                // Device ready — send chunks one at a time, waiting for 0x71 ACK each
-                let chunks = payload.chunked(size: OD.bleChunkSize - 2)
-                for (i, chunk) in chunks.enumerated() {
-                    let pkt = ODCommands.imageChunk(chunk)
-                    self.appendLog(direction: .sent, data: pkt, label: nil)
-                    let progress = Double(i + 1) / Double(max(chunks.count, 1))
-                    self.enqueue(PendingCommand(data: pkt, awaitNotification: true) { [weak self] _ in
-                        DispatchQueue.main.async { self?.uploadProgress = progress }
-                    })
-                }
-
-                let endPkt = ODCommands.imageEnd()
-                self.appendLog(direction: .sent, data: endPkt, label: "Image End")
-                self.enqueue(PendingCommand(data: endPkt, awaitNotification: true) { [weak self] _ in
-                    DispatchQueue.main.async { self?.isUploading = false; self?.uploadProgress = 1.0 }
-                })
-            })
-        }
-    }
-
-    // MARK: - CBPeripheralDelegate
-
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        if let e = error { logError("Service discovery: \(e.localizedDescription)"); return }
-        guard let svc = peripheral.services?.first(where: { $0.uuid == OD.serviceUUID }) else {
-            logError("OD service not found"); return
-        }
-        peripheral.discoverCharacteristics([OD.characteristicUUID], for: svc)
-    }
-
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService,
-                    error: Error?) {
-        if let e = error { logError("Characteristic: \(e.localizedDescription)"); return }
-        guard let ch = service.characteristics?.first(where: { $0.uuid == OD.characteristicUUID }) else {
-            logError("OD characteristic not found"); return
-        }
-        characteristic = ch
-        peripheral.setNotifyValue(true, for: ch)
-    }
-
-    func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor
-                    characteristic: CBCharacteristic, error: Error?) {
-        if let e = error { logError("Notify: \(e.localizedDescription)"); return }
-        DispatchQueue.main.async { self.connectionState = .connected }
-        readFirmware()
-    }
-
-    func peripheral(_ peripheral: CBPeripheral, didWriteValueFor
-                    characteristic: CBCharacteristic, error: Error?) {
-        if let e = error { logError("Write: \(e.localizedDescription)") }
-        if let cmd = inFlight, !cmd.awaitNotification {
-            completeInFlight(Data())
-        }
-    }
-
-    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor
-                    characteristic: CBCharacteristic, error: Error?) {
-        guard error == nil, let data = characteristic.value, !data.isEmpty else { return }
-        appendLog(direction: .received, data: data, label: decodeResponseLabel(data))
-        handleResponse(data)
-    }
-
-    // MARK: - Command Queue
-
-    private func enqueue(_ cmd: PendingCommand) {
-        queue.append(cmd)
-        drainQueue()
-    }
-
-    private func enqueueNoResponse(_ data: Data) {
-        queue.append(PendingCommand(data: data, awaitNotification: false, completion: nil))
-        drainQueue()
-    }
-
-    private func drainQueue() {
-        guard inFlight == nil, !queue.isEmpty, let ch = characteristic else { return }
-        let next = queue.removeFirst()
-        inFlight = next
-        if next.awaitNotification {
-            peripheral.writeValue(next.data, for: ch, type: .withResponse)
-        } else {
-            guard peripheral.canSendWriteWithoutResponse else {
-                queue.insert(next, at: 0)
-                inFlight = nil
-                return
-            }
-            peripheral.writeValue(next.data, for: ch, type: .withoutResponse)
-            inFlight = nil
-            DispatchQueue.main.async { self.drainQueue() }
-        }
-    }
-
-    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
-        drainQueue()
-    }
-
-    // MARK: - Response Handling
-
-    private func handleResponse(_ data: Data) {
-        guard data.count >= 2 else { completeInFlight(data); return }
-        if data.count >= 3, data[0] == 0x00, data[2] == 0xFE {
-            DispatchQueue.main.async {
-                self.lastError = "Authentication required"
-                if data[1] == 0x44 {
-                    self.advertisementError = "Authentication required"
-                    self.isReadingAdvertisement = false
-                }
-            }
-            completeInFlight(data)
             return
         }
-        switch data[1] {
-        case 0x43:
-            if data.count > 3, let str = String(data: data[3...], encoding: .utf8) {
-                DispatchQueue.main.async { self.firmwareVersion = str.trimmingCharacters(in: .controlCharacters) }
-            }
-            completeInFlight(data)
-        case 0x44:
-            guard data[0] == 0x00 else {
-                DispatchQueue.main.async {
-                    self.advertisementError = "Device rejected advertising data read"
-                    self.isReadingAdvertisement = false
-                }
-                completeInFlight(data)
+        sendRaw(ODCommands.nfcWriteStart(type: type, totalLength: UInt16(clamping: payload.count)),
+                label: "NFC Write Start")
+        for chunk in payload.chunked(size: chunkSize) {
+            sendRaw(ODCommands.nfcWriteChunk(chunk), label: "NFC Chunk")
+        }
+        sendRaw(ODCommands.nfcWriteEnd(), label: "NFC Write End")
+    }
+
+    // MARK: - Image upload
+
+    func uploadImage(pixelData: Data, compressed: Bool = true) {
+        guard !isUploading else { return }
+        if let config {
+            let expected = ImageProcessor.expectedPackedByteCount(
+                width: config.displayWidth,
+                height: config.displayHeight,
+                colorScheme: config.colorScheme
+            )
+            print("[BLE] packed image colorScheme=\(config.colorScheme) bytes=\(pixelData.count) expected=\(expected)")
+            guard pixelData.count == expected else {
+                lastError = "Packed image has \(pixelData.count) bytes; color scheme \(config.colorScheme) requires \(expected)"
                 return
             }
-            guard data.count >= 18 else {
-                DispatchQueue.main.async {
-                    self.advertisementError = "Expected 16 advertisement bytes, got \(max(0, data.count - 2))"
-                    self.isReadingAdvertisement = false
-                }
-                completeInFlight(data)
-                return
+        }
+        isUploading = true
+        uploadProgress = 0
+        let modes = config?.transmissionModes ?? 0
+
+        let arguments: [String: Any] = [
+            "rawHex": pixelData.hexString.replacingOccurrences(of: " ", with: ""),
+            "compress": compressed,
+            "transmissionModes": Int(modes),
+            "useFastRefresh": false
+        ]
+        call("uploadPacked", arguments: arguments) { [weak self] result in
+            self?.isUploading = false
+            switch result {
+            case .success: self?.uploadProgress = 1
+            case .failure(let error): self?.lastError = error.localizedDescription
             }
-            publishAdvertisement(Data(data[2..<18]))
-            completeInFlight(data)
-        case 0x40:
-            assembleConfigChunk(data)
-        case 0x50:
-            completeInFlight(data)
-        case 0x70:  // imageStart ACK — triggers chunk sending
-            completeInFlight(data)
-        case 0x71:  // imageData chunk ACK — advance queue to next chunk
-            completeInFlight(data)
-        case 0x72:
-            DispatchQueue.main.async { self.isUploading = false }
-            completeInFlight(data)
-        case 0xCE:
-            completeInFlight(data)
-        case 0xCF:
-            DispatchQueue.main.async { self.lastError = "Device rejected Toolbox configuration" }
-            completeInFlight(data)
+        }
+    }
+
+    // MARK: - Runtime results
+
+    private func call(_ operation: String, arguments: [String: Any] = [:],
+                      completion: OpenDisplayJSRuntime.Completion? = nil) {
+        guard let runtime else {
+            let error = OpenDisplayJSRuntime.RuntimeError.transportUnavailable
+            lastError = error.localizedDescription
+            completion?(.failure(error))
+            return
+        }
+        runtime.call(operation, arguments: arguments, completion: completion)
+    }
+
+    private func callIgnoringResult(_ operation: String) {
+        call(operation) { [weak self] result in
+            if case .failure(let error) = result { self?.lastError = error.localizedDescription }
+        }
+    }
+
+    private func handleRuntimeEvent(type: String, payload: [String: Any]) {
+        switch type {
+        case "error":
+            lastError = payload["message"] as? String ?? "Unknown ble-common.js error"
+        case "log":
+            if let message = payload["message"] as? String { print("[ble-common] \(message)") }
+        case "uploadProgress":
+            let progress = (payload["progress"] as? NSNumber)?.doubleValue ?? 0
+            let total = max(1, (payload["total"] as? NSNumber)?.doubleValue ?? 1)
+            uploadProgress = min(1, progress / total)
         default:
-            completeInFlight(data)
+            break
         }
-    }
-
-    private func assembleConfigChunk(_ data: Data) {
-        guard data.count >= 4 else { completeInFlight(data); return }
-        let chunkNum = Int(data[2]) | (Int(data[3]) << 8)
-        if chunkNum == 0 && data.count >= 6 {
-            configExpectedLength = Int(data[4]) | (Int(data[5]) << 8)
-            configBuffer = Data(data[6...])
-        } else {
-            configBuffer.append(data[4...])
-        }
-        if configBuffer.count >= configExpectedLength && configExpectedLength > 0 {
-            let blob = configBuffer
-            DispatchQueue.main.async {
-                self.config = try? ODConfig.parse(blob)
-                self.reparseAdvertisement()
-            }
-            completeInFlight(data)
-        }
-    }
-
-    private func completeInFlight(_ data: Data) {
-        let cmd = inFlight; inFlight = nil
-        cmd?.completion?(data)
-        drainQueue()
     }
 
     private func publishAdvertisement(_ data: Data) {
         do {
             let payload = Data(data.prefix(16))
-            let decoded = try ODAdvertisementData.parse(
-                payload,
-                layout: ODAdvertisementLayout(config: config)
-            )
-            DispatchQueue.main.async {
-                self.msdData = payload
-                self.msdHex = payload.hexString
-                self.advertisement = decoded
-                self.advertisementError = nil
-                self.isReadingAdvertisement = false
-            }
+            let decoded = try ODAdvertisementData.parse(payload, layout: ODAdvertisementLayout(config: config))
+            msdData = payload
+            msdHex = payload.hexString
+            advertisement = decoded
+            advertisementError = nil
+            isReadingAdvertisement = false
         } catch {
-            DispatchQueue.main.async {
-                self.advertisementError = error.localizedDescription
-                self.isReadingAdvertisement = false
-            }
+            advertisementError = error.localizedDescription
+            isReadingAdvertisement = false
         }
     }
 
@@ -407,23 +345,26 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         publishAdvertisement(msdData)
     }
 
-    // MARK: - Logging
-
     private func appendLog(direction: LogEntry.Direction, data: Data, label: String?) {
+        // Do not publish or print every image-data chunk. At 4-gray resolution this otherwise
+        // causes hundreds of main-thread log updates. A Debug launch flag can restore them.
+        let isImageChunk = data.count >= 2 && data[1] == 0x71
+        guard BLELogging.detailedPayloads || !isImageChunk else { return }
         let entry = LogEntry(direction: direction, data: data, label: label)
-        DispatchQueue.main.async { self.log.append(entry) }
+        let arrow = direction == .sent ? "→" : "←"
+        print("[BLE] \(arrow) \(label ?? "") \(data.hexString)")
+        logHandler(entry)
     }
 
-    private func logError(_ msg: String) {
-        DispatchQueue.main.async { self.lastError = msg }
+    private func trace(_ message: String) {
+        let message = "[\(deviceID.prefix(8))] \(message)"
+        print("[BLETrace] \(message)")
+        logHandler(LogEntry(direction: .system, data: Data(), label: message))
     }
 
-    private func decodeResponseLabel(_ data: Data) -> String? {
+    private func responseLabel(_ data: Data) -> String? {
         guard data.count >= 2 else { return nil }
-        let status = data[0] == 0x00 ? "OK" : (data[0] == 0xFF ? "ERR" : "?")
-        if let cmd = OD.Cmd(rawValue: UInt16(data[0]) << 8 | UInt16(data[1])) {
-            return "\(status) \(cmd.displayName)"
-        }
+        let status = data[0] == 0x00 ? "OK" : (data[0] == 0xFF ? "ERR" : nil)
         return status
     }
 }
