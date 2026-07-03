@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-EXPECTED="91c44d855f0245a5960e3e828399a9dfb5d0417f1160a8207a2bf4f7c46f13ef"
+EXPECTED="583832deefde7552155d835cf1ec39b1d97f87175a79bb04d2e9e77987f02be2"
 ACTUAL="$(shasum -a 256 Resources/ble-common.js | awk '{print $1}')"
 
 if [ "$ACTUAL" != "$EXPECTED" ]; then

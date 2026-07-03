@@ -1,6 +1,10 @@
 import Foundation
 import CoreBluetooth
 
+enum AppInfo {
+    static let version = "1.0"
+}
+
 enum OD {
     static let serviceUUID        = CBUUID(string: "2446")
     static let characteristicUUID = CBUUID(string: "2446")
@@ -61,7 +65,7 @@ enum OD {
     ]
 }
 
-enum ConnectionState {
+enum ConnectionState: Equatable {
     case disconnected, connecting, connected, failed
 }
 

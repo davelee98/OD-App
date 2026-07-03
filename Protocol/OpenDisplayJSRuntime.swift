@@ -77,11 +77,14 @@ final class OpenDisplayJSRuntime {
         nextOperationID += 1
         if let completion { completions[id] = completion }
 
+        print("[OpenDisplayJSRuntime] call #\(id) \(operation) dispatching to __odCall")
         do {
             let data = try JSONSerialization.data(withJSONObject: arguments)
             let json = String(decoding: data, as: UTF8.self)
             context.objectForKeyedSubscript("__odCall")?.call(withArguments: [id, operation, json])
+            print("[OpenDisplayJSRuntime] call #\(id) \(operation) __odCall returned (JS runs async from here)")
         } catch {
+            print("[OpenDisplayJSRuntime] call #\(id) \(operation) failed to serialize arguments: \(error)")
             completions.removeValue(forKey: id)?(.failure(error))
         }
         return id
@@ -116,12 +119,18 @@ final class OpenDisplayJSRuntime {
         case "write":
             guard let id = Self.integer(object["id"]),
                   let hex = object["hex"] as? String,
-                  let data = Data(hexString: hex) else { return }
+                  let data = Data(hexString: hex) else {
+                print("[OpenDisplayJSRuntime] JS write invocation malformed: \(json)")
+                return
+            }
+            print("[OpenDisplayJSRuntime] JS requested BLE write id=\(id) bytes=\(data.count)")
             guard let onWrite else {
+                print("[OpenDisplayJSRuntime] JS write id=\(id) failed: onWrite handler unavailable")
                 resolveWrite(id: id, error: RuntimeError.transportUnavailable.localizedDescription)
                 return
             }
             onWrite(data) { [weak self] error in
+                print("[OpenDisplayJSRuntime] JS write id=\(id) transport completion: error=\(error?.localizedDescription ?? "nil")")
                 self?.resolveWrite(id: id, error: error?.localizedDescription)
             }
         case "scheduleTimer":
@@ -140,14 +149,22 @@ final class OpenDisplayJSRuntime {
         guard let object = Self.jsonObject(json), let type = object["type"] as? String else { return }
         let payload = object["payload"] as? [String: Any] ?? [:]
 
-        if type == "operation", let id = Self.integer(payload["id"]),
-           let completion = completions.removeValue(forKey: id) {
-            if (payload["ok"] as? Bool) == true {
-                completion(.success(payload["result"] as? [String: Any] ?? [:]))
+        if type == "operation", let id = Self.integer(payload["id"]) {
+            let ok = (payload["ok"] as? Bool) == true
+            print("[OpenDisplayJSRuntime] operation #\(id) resolved ok=\(ok) error=\(payload["error"] ?? "nil")")
+            if let completion = completions.removeValue(forKey: id) {
+                if ok {
+                    completion(.success(payload["result"] as? [String: Any] ?? [:]))
+                } else {
+                    completion(.failure(RuntimeError.operationFailed(payload["error"] as? String ?? "Unknown error")))
+                }
             } else {
-                completion(.failure(RuntimeError.operationFailed(payload["error"] as? String ?? "Unknown error")))
+                print("[OpenDisplayJSRuntime] operation #\(id) resolved but no completion was registered (already consumed or unknown id)")
             }
             return
+        }
+        if type != "log" {
+            print("[OpenDisplayJSRuntime] event type=\(type) payload=\(payload)")
         }
         onEvent?(type, payload)
     }

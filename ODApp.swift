@@ -8,9 +8,38 @@ struct ODApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
                 .environmentObject(bleManager)
         }
         .modelContainer(for: SavedDisplayEntity.self)
+    }
+}
+
+private struct RootView: View {
+    @State private var showSplash = true
+    @State private var dismissWorkItem: DispatchWorkItem?
+
+    var body: some View {
+        ZStack {
+            ContentView()
+            if showSplash {
+                SplashView()
+                    .transition(.opacity)
+                    .contentShape(Rectangle())
+                    .onTapGesture { dismissSplash() }
+            }
+        }
+        .onAppear {
+            guard dismissWorkItem == nil else { return }
+            let work = DispatchWorkItem { dismissSplash() }
+            dismissWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
+        }
+    }
+
+    private func dismissSplash() {
+        dismissWorkItem?.cancel()
+        dismissWorkItem = nil
+        withAnimation { showSplash = false }
     }
 }

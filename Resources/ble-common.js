@@ -116,7 +116,7 @@ class OpenDisplayBLE {
     
     // Load YAML config for forward compatibility
     // Default to static absolute URL
-    const defaultPath = 'https://opendisplay.org/firmware/toolbox/config.yaml';
+    const defaultPath = '/firmware/toolbox/config.yaml';
     // Delay loading to ensure js-yaml script has time to load
     // Scripts load asynchronously, so we need to wait for them
     const loadConfig = () => {
@@ -1642,12 +1642,12 @@ class OpenDisplayBLE {
     }
     
     const hexString = this.bytesToHex(bytes.buffer);
-    
+
     // Built-in config read handler
     if (this.configReadState.active && this.handleConfigReadNotification(bytes)) {
       return;
     }
-    
+
     // Built-in config write ACK handler
     if (this.configWriteState.active && this.handleConfigWriteNotification(bytes)) {
       return;
@@ -3731,12 +3731,17 @@ class OpenDisplayBLE {
       const uncompressedSize = byteData.length;
       const byteDataUint8 = new Uint8Array(byteData);
       
-      const supportsZip = transmissionModes !== null && transmissionModes !== undefined &&
+      let supportsZip = transmissionModes !== null && transmissionModes !== undefined &&
                           (transmissionModes & TRANSMISSION_MODE_ZIP) !== 0;
       const supportsStreamingDecompression = transmissionModes !== null && transmissionModes !== undefined &&
         (transmissionModes & TRANSMISSION_MODE_STREAMING_DECOMPRESSION) !== 0;
+        
+      // Forcing the flag
+if (supportsStreamingDecompression) {
+  supportsZip = true; 
+}
       const supportsCompression = supportsZip && supportsStreamingDecompression;
-
+      
       let compressedBytes = null;
       if (supportsCompression && typeof pako !== 'undefined') {
         try {

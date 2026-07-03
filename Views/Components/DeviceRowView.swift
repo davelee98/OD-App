@@ -13,12 +13,6 @@ struct DeviceRowView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(device.name)
                     .font(.headline)
-                if let msd = device.msdHex {
-                    Text(msd)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
             }
 
             Spacer()

@@ -16,50 +16,18 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if displays.isEmpty {
-                    emptyState
-                } else {
-                    List {
-                        ForEach(displays) { entity in
-                            HStack(spacing: 12) {
-                                NavigationLink {
-                                    ComposerView(entity: entity).environmentObject(ble)
-                                } label: {
-                                    DisplayRowLabel(entity: entity)
-                                }
-                                .buttonStyle(.plain)
-
-                                Button {
-                                    displayToEdit = entity
-                                } label: {
-                                    Image(systemName: "gearshape")
-                                        .frame(width: 32, height: 32)
-                                }
-                                .buttonStyle(.bordered)
-                                .accessibilityLabel("Modify \(entity.friendlyName)")
-                            }
-                            .padding(.vertical, 4)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button(role: .destructive) {
-                                    displayToDelete = entity
-                                    showDeleteConfirmation = true
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                            }
-                        }
-                    }
-                    .listStyle(.insetGrouped)
-                }
+            VStack(spacing: 0) {
+                pageHeader
+                contentList
             }
-            .navigationTitle("My Displays")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showAdvanced = true } label: { Image(systemName: "gearshape") }
                         .accessibilityLabel("Advanced")
                 }
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button { showAddSheet = true } label: { Image(systemName: "plus") }
                         .accessibilityLabel("Add Display")
                 }
@@ -75,6 +43,57 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) { displayToDelete = nil }
         } message: { entity in
             Text("\(entity.friendlyName) and its saved connection credentials will be removed.")
+        }
+    }
+
+    private var pageHeader: some View {
+        HStack {
+            Text("OpenDisplay Utility")
+                .font(.title2.weight(.semibold))
+            Spacer()
+            ODLogoView(height: 80)
+        }
+        .padding(.horizontal)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private var contentList: some View {
+        if displays.isEmpty {
+            emptyState
+        } else {
+            List {
+                ForEach(displays) { entity in
+                    HStack(spacing: 12) {
+                        NavigationLink {
+                            ComposerView(entity: entity).environmentObject(ble)
+                        } label: {
+                            DisplayRowLabel(entity: entity)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            displayToEdit = entity
+                        } label: {
+                            Image(systemName: "gearshape")
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel("Modify \(entity.friendlyName)")
+                    }
+                    .padding(.vertical, 4)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            displayToDelete = entity
+                            showDeleteConfirmation = true
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
         }
     }
 

@@ -24,12 +24,12 @@
 		010000000000000000000020 /* LEDPattern.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000020 /* LEDPattern.swift */; };
 		010000000000000000000021 /* ImageProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000021 /* ImageProcessor.swift */; };
 		010000000000000000000022 /* ToolboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000022 /* ToolboxView.swift */; };
+		010000000000000000000053 /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000053 /* SplashView.swift */; };
 		010000000000000000000024 /* ODLogoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000024 /* ODLogoView.swift */; };
 		010000000000000000000025 /* ToolboxData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000025 /* ToolboxData.swift */; };
 		010000000000000000000026 /* AdvertisementData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000026 /* AdvertisementData.swift */; };
 		010000000000000000000030 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000030 /* Assets.xcassets */; };
 		010000000000000000000031 /* simple-config-presets.json in Resources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000031 /* simple-config-presets.json */; };
-		010000000000000000000032 /* toolbox-schema.json in Resources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000032 /* toolbox-schema.json */; };
 		010000000000000000000040 /* DisplayDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000040 /* DisplayDevice.swift */; };
 		010000000000000000000041 /* DisplayCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000041 /* DisplayCanvasView.swift */; };
 		010000000000000000000042 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000042 /* ComposerView.swift */; };
@@ -44,6 +44,10 @@
 		01000000000000000000004B /* js-yaml.min.js in Resources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000004B /* js-yaml.min.js */; };
 		01000000000000000000004C /* pako.js in Resources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000004C /* pako.js */; };
 		01000000000000000000004D /* config.yaml in Resources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000004D /* config.yaml */; };
+		01000000000000000000004E /* ToolboxConfigRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000004E /* ToolboxConfigRuntime.swift */; };
+		01000000000000000000004F /* toolbox-config-engine.js in Resources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000004F /* toolbox-config-engine.js */; };
+		010000000000000000000050 /* ToolboxConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000050 /* ToolboxConfigTests.swift */; };
+		010000000000000000000051 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000052 /* XCTest.framework */; };
 		EC7030B92FEF0203009DC919 /* CryptoSwift in Frameworks */ = {isa = PBXBuildFile; productRef = EC7030B82FEF0203009DC919 /* CryptoSwift */; };
 /* End PBXBuildFile section */
 
@@ -68,11 +72,11 @@
 		020000000000000000000021 /* ImageProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageProcessor.swift; sourceTree = "<group>"; };
 		020000000000000000000022 /* ToolboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolboxView.swift; sourceTree = "<group>"; };
 		020000000000000000000024 /* ODLogoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODLogoView.swift; sourceTree = "<group>"; };
+		020000000000000000000053 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
 		020000000000000000000025 /* ToolboxData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolboxData.swift; sourceTree = "<group>"; };
 		020000000000000000000026 /* AdvertisementData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvertisementData.swift; sourceTree = "<group>"; };
 		020000000000000000000030 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		020000000000000000000031 /* simple-config-presets.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "simple-config-presets.json"; sourceTree = "<group>"; };
-		020000000000000000000032 /* toolbox-schema.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "toolbox-schema.json"; sourceTree = "<group>"; };
 		020000000000000000000040 /* DisplayDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayDevice.swift; sourceTree = "<group>"; };
 		020000000000000000000041 /* DisplayCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayCanvasView.swift; sourceTree = "<group>"; };
 		020000000000000000000042 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
@@ -87,7 +91,22 @@
 		02000000000000000000004B /* js-yaml.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "js-yaml.min.js"; sourceTree = "<group>"; };
 		02000000000000000000004C /* pako.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = pako.js; sourceTree = "<group>"; };
 		02000000000000000000004D /* config.yaml */ = {isa = PBXFileReference; lastKnownFileType = text; path = config.yaml; sourceTree = "<group>"; };
+		02000000000000000000004E /* ToolboxConfigRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolboxConfigRuntime.swift; sourceTree = "<group>"; };
+		02000000000000000000004F /* toolbox-config-engine.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "toolbox-config-engine.js"; sourceTree = "<group>"; };
+		020000000000000000000050 /* ToolboxConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolboxConfigTests.swift; sourceTree = "<group>"; };
+		020000000000000000000051 /* OD AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "OD AppTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		020000000000000000000052 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
+
+/* Begin PBXContainerItemProxy section */
+		090000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 070000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 050000000000000000000001;
+			remoteInfo = "OD App";
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		040000000000000000000003 /* Frameworks */ = {
@@ -98,6 +117,14 @@
 				010000000000000000000011 /* Security.framework in Frameworks */,
 				010000000000000000000047 /* JavaScriptCore.framework in Frameworks */,
 				EC7030B92FEF0203009DC919 /* CryptoSwift in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		040000000000000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				010000000000000000000051 /* XCTest.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +139,7 @@
 				020000000000000000000012 /* Info.plist */,
 				020000000000000000000030 /* Assets.xcassets */,
 				030000000000000000000009 /* Resources */,
+				03000000000000000000000A /* Tests */,
 				030000000000000000000002 /* BLE */,
 				030000000000000000000003 /* Protocol */,
 				030000000000000000000004 /* Views */,
@@ -136,6 +164,7 @@
 			isa = PBXGroup;
 			children = (
 				020000000000000000000046 /* OpenDisplayJSRuntime.swift */,
+				02000000000000000000004E /* ToolboxConfigRuntime.swift */,
 				020000000000000000000006 /* ODCommands.swift */,
 				020000000000000000000007 /* ODAuth.swift */,
 				020000000000000000000008 /* ODConfig.swift */,
@@ -153,6 +182,7 @@
 				02000000000000000000000C /* BLETesterView.swift */,
 				020000000000000000000022 /* ToolboxView.swift */,
 				020000000000000000000024 /* ODLogoView.swift */,
+				020000000000000000000053 /* SplashView.swift */,
 				030000000000000000000005 /* Components */,
 			);
 			path = Views;
@@ -186,6 +216,7 @@
 				020000000000000000000010 /* CoreBluetooth.framework */,
 				020000000000000000000011 /* Security.framework */,
 				020000000000000000000047 /* JavaScriptCore.framework */,
+				020000000000000000000052 /* XCTest.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -194,6 +225,7 @@
 			isa = PBXGroup;
 			children = (
 				020000000000000000000013 /* OD App.app */,
+				020000000000000000000051 /* OD AppTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -207,10 +239,18 @@
 				02000000000000000000004B /* js-yaml.min.js */,
 				02000000000000000000004C /* pako.js */,
 				02000000000000000000004D /* config.yaml */,
+				02000000000000000000004F /* toolbox-config-engine.js */,
 				020000000000000000000031 /* simple-config-presets.json */,
-				020000000000000000000032 /* toolbox-schema.json */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		03000000000000000000000A /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				020000000000000000000050 /* ToolboxConfigTests.swift */,
+			);
+			path = Tests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -234,6 +274,24 @@
 			productReference = 020000000000000000000013 /* OD App.app */;
 			productType = "com.apple.product-type.application";
 		};
+		050000000000000000000002 /* OD AppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 060000000000000000000009 /* Build configuration list for PBXNativeTarget "OD AppTests" */;
+			buildPhases = (
+				040000000000000000000005 /* Sources */,
+				040000000000000000000007 /* Resources */,
+				040000000000000000000006 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				090000000000000000000002 /* PBXTargetDependency */,
+			);
+			name = "OD AppTests";
+			productName = "OD AppTests";
+			productReference = 020000000000000000000051 /* OD AppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -246,6 +304,10 @@
 				TargetAttributes = {
 					050000000000000000000001 = {
 						CreatedOnToolsVersion = 16.0;
+					};
+					050000000000000000000002 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = 050000000000000000000001;
 					};
 				};
 			};
@@ -266,6 +328,7 @@
 			projectRoot = "";
 			targets = (
 				050000000000000000000001 /* OD App */,
+				050000000000000000000002 /* OD AppTests */,
 			);
 		};
 /* End PBXProject section */
@@ -282,8 +345,15 @@
 				01000000000000000000004B /* js-yaml.min.js in Resources */,
 				01000000000000000000004C /* pako.js in Resources */,
 				01000000000000000000004D /* config.yaml in Resources */,
+				01000000000000000000004F /* toolbox-config-engine.js in Resources */,
 				010000000000000000000031 /* simple-config-presets.json in Resources */,
-				010000000000000000000032 /* toolbox-schema.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		040000000000000000000007 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -327,6 +397,7 @@
 				010000000000000000000005 /* ODDevice.swift in Sources */,
 				010000000000000000000006 /* ODCommands.swift in Sources */,
 				010000000000000000000046 /* OpenDisplayJSRuntime.swift in Sources */,
+				01000000000000000000004E /* ToolboxConfigRuntime.swift in Sources */,
 				010000000000000000000007 /* ODAuth.swift in Sources */,
 				010000000000000000000008 /* ODConfig.swift in Sources */,
 				01000000000000000000000C /* BLETesterView.swift in Sources */,
@@ -337,12 +408,29 @@
 				010000000000000000000021 /* ImageProcessor.swift in Sources */,
 				010000000000000000000022 /* ToolboxView.swift in Sources */,
 				010000000000000000000024 /* ODLogoView.swift in Sources */,
+				010000000000000000000053 /* SplashView.swift in Sources */,
 				010000000000000000000025 /* ToolboxData.swift in Sources */,
 				010000000000000000000026 /* AdvertisementData.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		040000000000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				010000000000000000000050 /* ToolboxConfigTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		090000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 050000000000000000000001 /* OD App */;
+			targetProxy = 090000000000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		060000000000000000000001 /* Debug */ = {
@@ -508,6 +596,36 @@
 			};
 			name = Release;
 		};
+		060000000000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.opendisplay.od-appTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OD App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH_SHALLOW_BUNDLE_YES)/OD App";
+			};
+			name = Debug;
+		};
+		060000000000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.opendisplay.od-appTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OD App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH_SHALLOW_BUNDLE_YES)/OD App";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -525,6 +643,15 @@
 			buildConfigurations = (
 				060000000000000000000003 /* Debug */,
 				060000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		060000000000000000000009 /* Build configuration list for PBXNativeTarget "OD AppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				060000000000000000000007 /* Debug */,
+				060000000000000000000008 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

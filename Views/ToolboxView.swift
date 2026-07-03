@@ -1,6 +1,5 @@
 import SwiftUI
 import UniformTypeIdentifiers
-import Combine
 import CoreBluetooth
 
 struct ToolboxView: View {
@@ -18,29 +17,31 @@ struct ToolboxView: View {
     @State private var deepSleepMinutes = 0.0
     @State private var isLocked = false
     @State private var encryptionKey = ""
-    @State private var firmwareAcknowledged = false
-    @State private var deviceConfigured = false
 
-    @State private var selectedPacketID: UUID?
-    @State private var showPacketEditor = false
+    @State private var packetEditorTarget: PacketEditorTarget?
     @State private var showSchemaEditor = false
     @State private var showImporter = false
     @State private var showExporter = false
     @State private var exportDocument = ToolboxJSONDocument()
     @State private var exportFilename = "oep_config.json"
+    @State private var exportContentType: UTType = .json
     @State private var showRebootConfirm = false
-    @State private var showDFUConfirm = false
     @State private var showConnectionSheet = false
     @State private var writeAfterConnecting = false
     @State private var rebootAfterWrite = false
     @State private var isConfiguring = false
     @State private var configureProgress = 0.0
     @State private var statusLog: [StatusEntry] = []
+    @State private var suppressAdvancedModeOnConfigChange = false
 
     enum Mode: String, CaseIterable, Identifiable {
-        case simple = "Setup"
-        case advanced = "Advanced"
+        case simple = "Simple Setup"
+        case advanced = "Advanced Mode"
         var id: String { rawValue }
+    }
+
+    struct PacketEditorTarget: Identifiable {
+        let id: UUID
     }
 
     var body: some View {
@@ -57,9 +58,6 @@ struct ToolboxView: View {
             if mode == .simple {
                 presetSection
                 hardwareSection
-                optionsSection
-                firmwareSection
-                configureSection
             } else {
                 packetEditorSection
                 packageBytesSection
@@ -70,35 +68,75 @@ struct ToolboxView: View {
             deviceActionsSection
             if !statusLog.isEmpty { logSection }
         }
-        .navigationTitle("Toolbox")
+        .navigationTitle("OpenDisplay Device Configuration")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear(perform: loadDeviceConfiguration)
-        .onReceive(deviceConfigPublisher) { config in
+        // `.onReceive` with a publisher built fresh on every `body` evaluation (the old
+        // `deviceConfigPublisher`/`deviceErrorPublisher` computed properties) resubscribes each
+        // render, and `@Published` always replays its *current* value to a new subscriber. That
+        // made this closure fire → mutate state → trigger another `body` evaluation → resubscribe
+        // → replay → fire again, forever, pegging the main thread. `.onChange(of:)` diffs the
+        // actual value instead of resubscribing, so it only fires on a real change.
+        //
+        // Status logging for a read triggered *from this view* (Read Toolbox button, initial
+        // auto-read) is reported directly from `readConfig`'s completion, not from here — an
+        // `@Published` value diff can't tell two consecutive identical failures apart, so relying
+        // on it alone silently drops the second "still failing" message. This handler only keeps
+        // the picker/packet state in sync if the config changes for some other reason (e.g. a
+        // read kicked off from another screen while reconnecting).
+        .onChange(of: device?.config) { _, config in
             guard let config else { return }
             configuration = config.toolbox
             syncSimpleSelections()
-            addLog("Configuration read successfully", type: .success)
+            // A write (e.g. "Configure over Bluetooth") also updates `device.config` on success,
+            // but that shouldn't yank the user into Advanced mode — only an actual config *read*
+            // should.
+            if suppressAdvancedModeOnConfigChange {
+                suppressAdvancedModeOnConfigChange = false
+            } else {
+                mode = .advanced
+            }
         }
-        .onReceive(deviceErrorPublisher) { error in
+        // Catch-all for error sources that don't have their own completion-based status
+        // reporting (authentication, MSD reads, misc `ble-common.js` runtime errors). Read/Write
+        // Toolbox report their own status directly (see above and `writeConfiguration`) so a
+        // repeat of the identical error isn't silently dropped by this value diff.
+        .onChange(of: device?.lastError) { _, error in
             if let error { addLog(error, type: .error) }
         }
         .onChange(of: ble.connectedDevice) { _, connected in
+            print("[diag] ble.connectedDevice changed; connected=\(connected != nil) writeAfterConnecting=\(writeAfterConnecting)")
             guard connected != nil else { return }
             showConnectionSheet = false
-            if writeAfterConnecting {
-                configureProgress = 0.3
-                writeAfterConnecting = false
-                let shouldReboot = rebootAfterWrite
-                rebootAfterWrite = false
-                writeConfiguration(rebootWhenDone: shouldReboot)
-            }
+        }
+        // `ble.connectedDevice` is set as soon as CoreBluetooth's `didConnect` fires, well before
+        // GATT service/characteristic discovery and notifications are set up — writing that early
+        // hit the characteristic before it existed and just timed out. `connectionState` only
+        // reaches `.connected` once `CoreBluetoothTransport.onReady` fires, so wait for that instead.
+        .onChange(of: device?.connectionState) { _, state in
+            print("[diag] device.connectionState changed to \(String(describing: state)); writeAfterConnecting=\(writeAfterConnecting)")
+            guard state == .connected, writeAfterConnecting else { return }
+            configureProgress = 0.3
+            writeAfterConnecting = false
+            let shouldReboot = rebootAfterWrite
+            rebootAfterWrite = false
+            print("[diag] deferred write firing now (rebootWhenDone=\(shouldReboot))")
+            writeConfiguration(rebootWhenDone: shouldReboot)
         }
         .onChange(of: boardID) { _, _ in applyBoardDefaults() }
+        .onChange(of: mode) { _, newMode in
+            if newMode == .advanced && configuration.packets.isEmpty { resetConfiguration() }
+        }
         .onChange(of: isLocked) { _, locked in
             if locked && encryptionKey.count != 32 { encryptionKey = randomKey() }
             if !locked { encryptionKey = "" }
         }
-        .sheet(isPresented: $showPacketEditor) { packetEditorSheet }
+        // `.sheet(item:)` instead of `.sheet(isPresented:)` + a separately-set selection ID: the
+        // latter isn't atomic on first presentation (the sheet controller doesn't exist yet, so
+        // SwiftUI can build its content from a stale snapshot before the ID state propagates),
+        // which showed "Packet unavailable" on the very first tap and only worked afterward.
+        // Binding the sheet directly to the item that drives it removes that race entirely.
+        .sheet(item: $packetEditorTarget) { target in packetEditorSheet(for: target.id) }
         .sheet(isPresented: $showSchemaEditor) { schemaEditorSheet }
         .sheet(isPresented: $showConnectionSheet, onDismiss: {
             if ble.connectedDevice == nil {
@@ -110,15 +148,11 @@ struct ToolboxView: View {
         }) { ToolboxConnectionSheet().environmentObject(ble) }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json]) { importResult($0) }
         .fileExporter(isPresented: $showExporter, document: exportDocument,
-                      contentType: .json, defaultFilename: exportFilename) { result in
+                      contentType: exportContentType, defaultFilename: exportFilename) { result in
             if case .failure(let error) = result { addLog(error.localizedDescription, type: .error) }
         }
         .alert("Reboot device?", isPresented: $showRebootConfirm) {
             Button("Reboot", role: .destructive) { device?.reboot() }
-            Button("Cancel", role: .cancel) { }
-        }
-        .alert("Enter DFU / Bootloader?", isPresented: $showDFUConfirm) {
-            Button("Enter DFU", role: .destructive) { device?.enterDFU() }
             Button("Cancel", role: .cancel) { }
         }
     }
@@ -129,24 +163,26 @@ struct ToolboxView: View {
         Section {
             if let device {
                 ToolboxConnectionStatus(device: device)
-                if let firmware = device.firmwareVersion { LabeledContent("Firmware", value: firmware) }
-                if device.isAuthenticated {
-                    Label("Authenticated", systemImage: "checkmark.shield.fill").foregroundStyle(.green)
-                } else if device.psk != nil {
-                    Button("Authenticate") { if let key = device.psk { device.authenticate(psk: key) } }
+                // A single `if let` over one precomputed value instead of an `if / else if` chain —
+                // List/Form rows built from a chained conditional can leave a blank row (with its
+                // own separator line) when neither branch applies, which showed up as extra
+                // vertical space and a stray divider under the connection status row above.
+                if let authRow = authenticationRowState(for: device) {
+                    switch authRow {
+                    case .authenticated:
+                        Label("Authenticated", systemImage: "checkmark.shield.fill").foregroundStyle(.green)
+                    case .canAuthenticate(let key):
+                        Button("Authenticate") { device.authenticate(psk: key) }
+                    }
                 }
                 Button(role: .destructive) { ble.disconnect() } label: {
                     Label("Disconnect", systemImage: "bolt.slash")
                 }
             } else {
-                Text("Configure your setup offline, then connect when you are ready to read or write it.")
-                    .foregroundStyle(.secondary)
                 Button { showConnectionSheet = true } label: {
                     Label("Connect to OpenDisplay", systemImage: "antenna.radiowaves.left.and.right")
                 }
             }
-        } header: {
-            Label("Bluetooth Connection", systemImage: "antenna.radiowaves.left.and.right")
         }
     }
 
@@ -178,133 +214,17 @@ struct ToolboxView: View {
         }
     }
 
-    private var hardwareSection: some View {
-        Section {
-            Picker("Driver Board", selection: $boardID) {
-                Text("Select driver board").tag(String?.none)
-                ForEach(catalog.driverBoards) { Text($0.name).tag(Optional($0.id)) }
-            }
-
-            Picker("Display", selection: $displayID) {
-                Text("Select display").tag(String?.none)
-                ForEach(compatibleDisplays) { Text($0.name).tag(Optional($0.id)) }
-            }
-            .disabled(selectedBoard == nil)
-
-            Picker("Power", selection: $powerID) {
-                Text("Select power option").tag(String?.none)
-                ForEach(catalog.powerOptions) { Text($0.name).tag(Optional($0.id)) }
-            }
-
-            checklistRow("Driver board selected", done: selectedBoard != nil)
-            checklistRow("Display selected", done: selectedDisplay != nil)
-            checklistRow("Power option selected", done: selectedPower != nil)
-            checklistRow("Firmware installed", done: firmwareAcknowledged)
-            checklistRow("Device configured", done: deviceConfigured)
-        } header: {
-            Label("1. Choose Hardware", systemImage: "cpu")
-        }
-    }
-
-    private var optionsSection: some View {
-        Section {
-            HStack {
-                Label(isLocked ? "Locked" : "Unlocked", systemImage: isLocked ? "lock.fill" : "lock.open")
-                Spacer()
-                Toggle("Encryption", isOn: $isLocked).labelsHidden()
-            }
-            if isLocked {
-                TextField("32-character encryption key", text: $encryptionKey)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .font(.caption.monospaced())
-                Button("Generate Random Key") { encryptionKey = randomKey() }
-                if let device, encryptionKey.count == 32, !device.isAuthenticated {
-                    Button("Authenticate with This Key") {
-                        if let key = Data(hexString: encryptionKey) {
-                            device.psk = key
-                            device.authenticate(psk: key)
-                        }
-                    }
-                }
-            }
-            if selectedBoard?.installConfig?.type == "esp32" {
-                VStack(alignment: .leading) {
-                    Text("Deep sleep between updates: \(Int(deepSleepMinutes)) min")
-                    Slider(value: $deepSleepMinutes, in: 0...720, step: 1)
-                }
-            }
-        } header: {
-            Text("More Options")
-        } footer: {
-            Text(isLocked ? "Save or share the generated key; it is required to reconnect." : "Bluetooth application-layer encryption is disabled.")
-        }
-    }
-
     @ViewBuilder
-    private var firmwareSection: some View {
-        Section {
-            if let install = selectedBoard?.installConfig {
-                if let url = firmwareURL(install) {
-                    Link(destination: url) {
-                        Label("Open Firmware Package", systemImage: "square.and.arrow.up")
-                    }
-                }
-                if let repo = install.githubRepo, let url = URL(string: repo) {
-                    Link(destination: url) { Label("Firmware Repository", systemImage: "chevron.left.forwardslash.chevron.right") }
-                }
-                Toggle("Firmware installed", isOn: $firmwareAcknowledged)
-            } else {
-                Text("No automatic firmware package is defined for this board.")
-                    .foregroundStyle(.secondary)
-            }
-        } header: {
-            Label("2. Install Firmware", systemImage: "cable.connector")
-        } footer: {
-            Text("iPhone does not expose WebUSB/Web Serial. Open or share the package, then flash it from a supported USB host.")
-        }
+    private var hardwareSection: some View {
+        Text("1. Choose Hardware")
+            .font(.headline)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+        HardwareSectionView(catalog: catalog, boardID: $boardID, displayID: $displayID, powerID: $powerID)
+            .equatable()
     }
 
-    private var configureSection: some View {
-        Section {
-            Button {
-                isConfiguring = true
-                configureProgress = 0.1
-                buildSimpleConfiguration()
-                rebootAfterWrite = true
-                if device == nil {
-                    writeAfterConnecting = true
-                    showConnectionSheet = true
-                } else {
-                    rebootAfterWrite = false
-                    writeConfiguration(rebootWhenDone: true)
-                }
-            } label: {
-                Label("Configure over Bluetooth", systemImage: "arrow.up.circle.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(!simpleSelectionComplete || isConfiguring)
-
-            if isConfiguring {
-                ProgressView(value: configureProgress)
-                Text(configureProgressText).font(.caption).foregroundStyle(.secondary)
-            }
-
-            if let url = simpleShareURL ?? shareURL {
-                ShareLink(item: url) { Label("Share Toolbox Setup", systemImage: "square.and.arrow.up") }
-            }
-
-            Button("Advanced: Edit Packets") {
-                if simpleSelectionComplete { buildSimpleConfiguration() }
-                mode = .advanced
-            }
-        } header: {
-            Label("3. Configure", systemImage: "antenna.radiowaves.left.and.right")
-        } footer: {
-            Text(simpleSelectionComplete ? "Ready to build and write the selected configuration." : "Select a driver board, display, and power option to continue.")
-        }
-    }
 
     // MARK: - Advanced mode
 
@@ -312,8 +232,7 @@ struct ToolboxView: View {
         Section {
             ForEach(configuration.packets) { packet in
                 Button {
-                    selectedPacketID = packet.uuid
-                    showPacketEditor = true
+                    packetEditorTarget = PacketEditorTarget(id: packet.uuid)
                 } label: {
                     HStack {
                         VStack(alignment: .leading) {
@@ -325,17 +244,27 @@ struct ToolboxView: View {
                         Image(systemName: "chevron.right").foregroundStyle(.tertiary)
                     }
                 }
+                .deleteDisabled(schema.packetTypes[String(packet.packetType)]?.required == true || !configuration.unknownPacketTail.isEmpty)
             }
-            .onDelete { configuration.packets.remove(atOffsets: $0) }
-            .onMove { configuration.packets.move(fromOffsets: $0, toOffset: $1) }
+            .onDelete { offsets in
+                guard configuration.unknownPacketTail.isEmpty else { return }
+                let removable = offsets.filter {
+                    schema.packetTypes[String(configuration.packets[$0].packetType)]?.required != true
+                }
+                configuration.packets.remove(atOffsets: IndexSet(removable))
+            }
+            .onMove {
+                guard configuration.unknownPacketTail.isEmpty else { return }
+                configuration.packets.move(fromOffsets: $0, toOffset: $1)
+            }
 
             Menu {
                 ForEach(sortedPacketTypeIDs, id: \.self) { id in
                     if let definition = schema.packetTypes[id] {
                     Button("\(id) — \(definition.name)") {
-                        let fields = Dictionary(uniqueKeysWithValues: definition.fields.map { ($0.name, "0x0") })
-                        configuration.packets.append(ToolboxPacket(packetType: Int(id) ?? 0, fields: fields))
+                        addPacket(id: id, definition: definition)
                     }
+                    .disabled(!canAddPacket(id: id, definition: definition))
                     }
                 }
             } label: {
@@ -344,7 +273,11 @@ struct ToolboxView: View {
         } header: {
             Label("Packet Editor", systemImage: "square.stack.3d.up")
         } footer: {
-            Text("Packets are encoded in this order; sequence numbers are generated automatically.")
+            if configuration.unknownPacketTail.isEmpty {
+                Text("Packets are encoded in this order; sequence numbers are generated automatically.")
+            } else {
+                Text("An unknown packet tail is being preserved. Structural edits are disabled to keep its sequence numbers intact.")
+            }
         }
     }
 
@@ -359,6 +292,13 @@ struct ToolboxView: View {
             } else {
                 Text("The current packet set cannot be encoded.").foregroundStyle(.red)
             }
+            if let validation = configurationValidation {
+                ForEach(validation.issues) { issue in
+                    Label(issue.message, systemImage: issue.severity == "error" ? "xmark.octagon" : "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(issue.severity == "error" ? .red : .orange)
+                }
+            }
         } header: {
             Text("Finished Package Bytes")
         }
@@ -371,7 +311,7 @@ struct ToolboxView: View {
             if let url = shareURL {
                 ShareLink(item: url) { Label("Share Toolbox URL", systemImage: "link") }
             }
-            Button("Reset Packet UI", role: .destructive) { configuration = ToolboxConfiguration() }
+            Button("Reset Packet UI", role: .destructive, action: resetConfiguration)
         } header: {
             Text("Import, Export & Share")
         }
@@ -383,13 +323,16 @@ struct ToolboxView: View {
             LabeledContent("Packet Types", value: "\(schema.packetTypes.count)")
             Button("Edit Schema") { showSchemaEditor = true }
             Button("Reload Bundled Schema") {
-                schema = ToolboxResources.schema
-                schemaText = ToolboxResources.schemaText
-                addLog("Bundled schema reloaded", type: .success)
+                do {
+                    schema = try ToolboxResources.resetSchema()
+                    schemaText = ToolboxResources.schemaText
+                    addLog("Bundled YAML schema reloaded", type: .success)
+                } catch { addLog(error.localizedDescription, type: .error) }
             }
-            Button("Download Schema JSON") {
+            Button("Download YAML") {
                 exportDocument = ToolboxJSONDocument(text: schemaText)
-                exportFilename = "toolbox-schema.json"
+                exportFilename = "config.yaml"
+                exportContentType = .plainText
                 showExporter = true
             }
         } header: {
@@ -401,33 +344,82 @@ struct ToolboxView: View {
 
     private var deviceActionsSection: some View {
         Section {
-            Button {
-                addLog("Reading configuration…", type: .info)
-                if let device { device.readConfig() } else { showConnectionSheet = true }
-            } label: { Label("Read Toolbox", systemImage: "arrow.down.circle") }
+            if mode == .simple {
+                Button {
+                    isConfiguring = true
+                    configureProgress = 0.1
+                    buildSimpleConfiguration()
+                    rebootAfterWrite = true
+                    if device == nil {
+                        writeAfterConnecting = true
+                        showConnectionSheet = true
+                    } else {
+                        rebootAfterWrite = false
+                        writeConfiguration(rebootWhenDone: true)
+                    }
+                } label: {
+                    Label("Configure over Bluetooth", systemImage: "arrow.up.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!simpleSelectionComplete || isConfiguring)
 
-            Button {
-                writeConfiguration()
-            } label: {
-                Label("Write Toolbox", systemImage: "arrow.up.circle")
+                if isConfiguring {
+                    ProgressView(value: configureProgress)
+                    Text(configureProgressText).font(.caption).foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Label(isLocked ? "Locked" : "Unlocked", systemImage: isLocked ? "lock.fill" : "lock.open")
+                    Spacer()
+                    Toggle("Encryption", isOn: $isLocked).labelsHidden()
+                }
+                if isLocked {
+                    TextField("32-character encryption key", text: $encryptionKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(.caption.monospaced())
+                    Button("Generate Random Key") { encryptionKey = randomKey() }
+                    if let device, encryptionKey.count == 32, !device.isAuthenticated {
+                        Button("Authenticate with This Key") {
+                            if let key = Data(hexString: encryptionKey) {
+                                device.psk = key
+                                device.authenticate(psk: key)
+                            }
+                        }
+                    }
+                }
             }
-            .disabled(device == nil || configuration.packets.isEmpty || encodedConfiguration == nil)
+
+            if mode == .advanced {
+                Button {
+                    if let device { readConfiguration(from: device) } else { showConnectionSheet = true }
+                } label: { Label("Read Toolbox", systemImage: "arrow.down.circle") }
+
+                Button {
+                    writeConfiguration()
+                } label: {
+                    Label("Write Toolbox", systemImage: "arrow.up.circle")
+                }
+                .disabled(device == nil || configuration.packets.isEmpty || encodedConfiguration == nil)
+            }
 
             Button(role: .destructive) { showRebootConfirm = true } label: {
-                Label("Reboot", systemImage: "arrow.clockwise")
-            }
-            Button(role: .destructive) { showDFUConfirm = true } label: {
-                Label("Enter DFU / Bootloader", systemImage: "square.and.arrow.down")
+                Label("Reboot Display", systemImage: "arrow.clockwise")
             }
             .disabled(device == nil)
         } header: {
-            Text("Device")
+            Text("Device Actions")
+        } footer: {
+            if mode == .simple {
+                Text(isLocked ? "Save or share the generated key; it is required to reconnect." : "Bluetooth application-layer encryption is disabled.")
+            }
         }
     }
 
     private var logSection: some View {
         Section {
-            ForEach(statusLog.suffix(30)) { entry in
+            ForEach(statusLog.suffix(50)) { entry in
                 HStack(alignment: .top, spacing: 7) {
                     Circle().fill(entry.type.color).frame(width: 7, height: 7).padding(.top, 5)
                     Text(entry.message).font(.caption.monospaced())
@@ -444,12 +436,13 @@ struct ToolboxView: View {
     // MARK: - Sheets
 
     @ViewBuilder
-    private var packetEditorSheet: some View {
-        if let index = selectedPacketIndex,
+    private func packetEditorSheet(for packetID: UUID) -> some View {
+        if let index = configuration.packets.firstIndex(where: { $0.uuid == packetID }),
            let definition = schema.packetTypes[String(configuration.packets[index].packetType)] {
-            ToolboxPacketEditor(packet: $configuration.packets[index], definition: definition) {
+            ToolboxPacketEditor(packet: $configuration.packets[index], definition: definition,
+                                allowsDelete: definition.required != true && configuration.unknownPacketTail.isEmpty) {
                 configuration.packets.remove(at: index)
-                showPacketEditor = false
+                packetEditorTarget = nil
             }
         } else {
             ContentUnavailableView("Packet unavailable", systemImage: "exclamationmark.triangle")
@@ -461,7 +454,7 @@ struct ToolboxView: View {
             TextEditor(text: $schemaText)
                 .font(.caption.monospaced())
                 .padding(8)
-                .navigationTitle("Toolbox Schema")
+                .navigationTitle("Toolbox YAML")
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Close") { showSchemaEditor = false }
@@ -486,43 +479,59 @@ struct ToolboxView: View {
             configuration = config.toolbox
             syncSimpleSelections()
         } else if let device {
-            addLog("Reading configuration…", type: .info)
-            device.readConfig()
+            readConfiguration(from: device)
+        }
+    }
+
+    /// Reports a definitive status line for this specific read — success or failure — every
+    /// time, including a repeat of the same error on a retry (see the note on
+    /// `.onChange(of: device?.config)` above for why that can't be left to a value diff).
+    private func readConfiguration(from device: ODDevice) {
+        addLog("Reading configuration…", type: .info)
+        device.readConfig { result in
+            switch result {
+            case .success(let model):
+                addLog("Configuration read successfully (\(model.toolbox.packets.count) packets)", type: .success)
+            case .failure(let error):
+                addLog(error.localizedDescription, type: .error)
+            }
         }
     }
 
     private func buildSimpleConfiguration() {
         guard let board = selectedBoard, let display = selectedDisplay, let power = selectedPower else { return }
-        let built = ToolboxConfigurationBuilder.build(
-            board: board, display: display, power: power,
-            deepSleepSeconds: Int(deepSleepMinutes * 60),
-            encryptionKey: isLocked ? encryptionKey : nil
-        )
-        var merged = configuration
-        merged.version = built.version
-        merged.minorVersion = built.minorVersion
-        for packet in built.packets {
-            merged.upsert(packet.packetType, fields: packet.fields,
-                          instance: packet.fields["instance_number"])
+        do {
+            configuration = try ToolboxConfigRuntime.shared.buildSimple(
+                boardID: board.id,
+                displayID: display.id,
+                powerID: power.id,
+                deepSleepSeconds: Int(deepSleepMinutes * 60),
+                encryptionKey: isLocked ? encryptionKey : nil,
+                base: configuration
+            )
+            addLog("Built \(configuration.packets.count) Toolbox packets from YAML and presets", type: .success)
+        } catch {
+            addLog("Configuration build failed: \(error.localizedDescription)", type: .error)
         }
-        configuration = merged
-        addLog("Built \(configuration.packets.count) Toolbox packets", type: .success)
     }
 
     private func writeConfiguration(rebootWhenDone: Bool = false) {
         guard let device else {
+            print("[diag] writeConfiguration called with no device; deferring")
             writeAfterConnecting = true
             showConnectionSheet = true
             return
         }
+        print("[diag] writeConfiguration starting; appState=\(device.connectionState) rebootWhenDone=\(rebootWhenDone)")
         guard encodedConfiguration != nil else {
             isConfiguring = false
             addLog("Configuration cannot be encoded", type: .error); return
         }
         if rebootWhenDone { configureProgress = 0.5 }
         if isLocked, let key = Data(hexString: encryptionKey) { device.psk = key }
+        suppressAdvancedModeOnConfigChange = true
         device.writeConfig(ODConfigModel(toolbox: configuration)) { succeeded in
-            deviceConfigured = succeeded
+            print("[diag] writeConfig completion fired; succeeded=\(succeeded)")
             addLog(succeeded ? "Configuration written successfully" : "Configuration write failed",
                    type: succeeded ? .success : .error)
             if succeeded && rebootWhenDone {
@@ -557,6 +566,7 @@ struct ToolboxView: View {
             let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
             exportDocument = ToolboxJSONDocument(text: String(decoding: data, as: UTF8.self))
             exportFilename = "oep_config.json"
+            exportContentType = .json
             showExporter = true
         } catch { addLog(error.localizedDescription, type: .error) }
     }
@@ -577,7 +587,15 @@ struct ToolboxView: View {
     private func syncSimpleSelections() {
         guard let manufacturer = configuration.packets.first(where: { $0.packetType == 2 }) else { return }
         boardID = idFromIndex(manufacturer.fields["simple_config_driver_index"], values: catalog.driverBoards)
-        displayID = idFromIndex(manufacturer.fields["simple_config_display_index"], values: catalog.displays)
+        // The Display picker only ever offers `compatibleDisplays` (filtered by the board just
+        // selected above), not the full `catalog.displays` list. Assigning a display outside
+        // that filtered set — which `idFromIndex` alone can't know about — leaves the Picker's
+        // `selection` pointing at a value with no matching `tag`, and relying on the
+        // `onChange(of: boardID)` → `applyBoardDefaults()` side effect to clean it up doesn't
+        // work when boardID happens to be unchanged from the last read (onChange never fires).
+        // Validate directly instead of depending on that side effect.
+        let candidateDisplayID = idFromIndex(manufacturer.fields["simple_config_display_index"], values: catalog.displays)
+        displayID = compatibleDisplays.first(where: { $0.id == candidateDisplayID })?.id ?? selectedBoard?.defaultDisplay
         powerID = idFromIndex(manufacturer.fields["simple_config_power_index"], values: catalog.powerOptions)
         if let security = configuration.packets.first(where: { $0.packetType == 39 }),
            parseInteger(security.fields["encryption_enabled"]) != 0 {
@@ -600,8 +618,6 @@ struct ToolboxView: View {
         if let selected = selectedDisplay, !compatibleDisplays.contains(where: { $0.id == selected.id }) { displayID = nil }
         if displayID == nil { displayID = board.defaultDisplay }
         if powerID == nil { powerID = board.defaultPower }
-        firmwareAcknowledged = false
-        deviceConfigured = false
     }
 
     private func randomKey() -> String {
@@ -610,19 +626,12 @@ struct ToolboxView: View {
 
     private func addLog(_ message: String, type: StatusEntry.EntryType) {
         statusLog.append(StatusEntry(message: message, type: type))
+        if statusLog.count > 50 { statusLog.removeFirst(statusLog.count - 50) }
     }
 
     // MARK: - Derived values
 
     private var device: ODDevice? { ble.connectedDevice }
-
-    private var deviceConfigPublisher: AnyPublisher<ODConfigModel?, Never> {
-        device?.$config.eraseToAnyPublisher() ?? Just(nil).eraseToAnyPublisher()
-    }
-
-    private var deviceErrorPublisher: AnyPublisher<String?, Never> {
-        device?.$lastError.eraseToAnyPublisher() ?? Just(nil).eraseToAnyPublisher()
-    }
 
     private var selectedBoard: ToolboxBoard? { catalog.driverBoards.first { $0.id == boardID } }
     private var selectedDisplay: ToolboxDisplay? { catalog.displays.first { $0.id == displayID } }
@@ -649,19 +658,12 @@ struct ToolboxView: View {
 
     private var encodedConfiguration: Data? { try? ToolboxPacketCodec.encode(configuration, schema: schema) }
 
-    private var shareURL: URL? {
-        guard let bytes = encodedConfiguration else { return nil }
-        return toolboxURL(for: bytes)
+    private var configurationValidation: ToolboxValidation? {
+        try? ToolboxConfigRuntime.shared.validate(configuration)
     }
 
-    private var simpleShareURL: URL? {
-        guard let board = selectedBoard, let display = selectedDisplay, let power = selectedPower else { return nil }
-        let config = ToolboxConfigurationBuilder.build(
-            board: board, display: display, power: power,
-            deepSleepSeconds: Int(deepSleepMinutes * 60),
-            encryptionKey: isLocked ? encryptionKey : nil
-        )
-        guard let bytes = try? ToolboxPacketCodec.encode(config, schema: schema) else { return nil }
+    private var shareURL: URL? {
+        guard let bytes = encodedConfiguration else { return nil }
         return toolboxURL(for: bytes)
     }
 
@@ -673,26 +675,65 @@ struct ToolboxView: View {
         return URL(string: "https://opendisplay.org/firmware/toolbox/?config=\(encoded)")
     }
 
-    private var selectedPacketIndex: Int? {
-        guard let selectedPacketID else { return nil }
-        return configuration.packets.firstIndex { $0.uuid == selectedPacketID }
-    }
 
     private var sortedPacketTypeIDs: [String] {
         schema.packetTypes.keys.sorted { (Int($0) ?? 0) < (Int($1) ?? 0) }
+    }
+
+    private enum AuthenticationRowState {
+        case authenticated
+        case canAuthenticate(Data)
+    }
+
+    private func authenticationRowState(for device: ODDevice) -> AuthenticationRowState? {
+        if device.isAuthenticated { return .authenticated }
+        if let key = device.psk { return .canAuthenticate(key) }
+        return nil
     }
 
     private func packetName(_ type: Int) -> String {
         schema.packetTypes[String(type)]?.name.replacingOccurrences(of: "_", with: " ").capitalized ?? "Unknown Packet"
     }
 
-    private func firmwareURL(_ install: ToolboxInstallConfig) -> URL? {
-        [install.downloadFile, install.manifest].compactMap { $0 }.compactMap(URL.init(string:)).first
+    private func canAddPacket(id: String, definition: ToolboxPacketDefinition) -> Bool {
+        guard configuration.unknownPacketTail.isEmpty, configuration.packets.count < 256 else { return false }
+        let count = configuration.packets.filter { $0.packetType == Int(id) }.count
+        if definition.repeatable != true { return count == 0 }
+        return count < instanceCapacity(definition)
     }
 
-    private func checklistRow(_ label: String, done: Bool) -> some View {
-        Label(label, systemImage: done ? "checkmark.circle.fill" : "circle")
-            .foregroundStyle(done ? .green : .secondary)
+    private func addPacket(id: String, definition: ToolboxPacketDefinition) {
+        guard canAddPacket(id: id, definition: definition) else { return }
+        var fields = Dictionary(uniqueKeysWithValues: definition.fields.map {
+            ($0.name, $0.type == "text" ? "" : "0x0")
+        })
+        if definition.repeatable == true,
+           definition.fields.contains(where: { $0.name == "instance_number" }) {
+            let used = Set(configuration.packets
+                .filter { $0.packetType == Int(id) }
+                .compactMap { parseInteger($0.fields["instance_number"]) })
+            if let next = (0..<instanceCapacity(definition)).first(where: { !used.contains($0) }) {
+                fields["instance_number"] = "0x\(String(next, radix: 16))"
+            }
+        }
+        configuration.packets.append(ToolboxPacket(packetType: Int(id) ?? 0, fields: fields))
+    }
+
+    private func instanceCapacity(_ definition: ToolboxPacketDefinition) -> Int {
+        guard let bytes = definition.fields.first(where: { $0.name == "instance_number" })?.size.byteCount else {
+            return 256
+        }
+        return bytes >= 4 ? Int.max : (0..<bytes).reduce(1) { value, _ in value * 256 }
+    }
+
+    private func resetConfiguration() {
+        guard configuration.unknownPacketTail.isEmpty else { return }
+        configuration = ToolboxConfiguration(version: schema.version, minorVersion: schema.minorVersion)
+        for id in sortedPacketTypeIDs {
+            if let definition = schema.packetTypes[id], definition.required == true {
+                addPacket(id: id, definition: definition)
+            }
+        }
     }
 
     private func parseInteger(_ raw: String?) -> Int? {
@@ -726,9 +767,58 @@ struct ToolboxView: View {
     }
 }
 
+/// Split out of `ToolboxView` so these Pickers only re-render when the hardware selection
+/// itself actually changes. `ToolboxView` re-evaluates its whole body on every BLE
+/// notification during a config read (progress ticks + log appends both propagate through
+/// `BLEManager`'s forwarded `objectWillChange`); inlined as a computed property, this section's
+/// Pickers were reconstructed — and re-validated their `selection` against `tag` — on every one
+/// of those passes. `.equatable()` at the call site lets SwiftUI skip re-invoking `body` unless
+/// the selection values it's bound to actually differ, so it renders once against the fully
+/// decoded config rather than once per chunk.
+private struct HardwareSectionView: View, Equatable {
+    let catalog: ToolboxPresetCatalog
+    @Binding var boardID: String?
+    @Binding var displayID: String?
+    @Binding var powerID: String?
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.boardID == rhs.boardID && lhs.displayID == rhs.displayID && lhs.powerID == rhs.powerID
+    }
+
+    private var selectedBoard: ToolboxBoard? { catalog.driverBoards.first { $0.id == boardID } }
+
+    /// Must mirror `ToolboxView.compatibleDisplays` exactly — the Display picker's selection is
+    /// only ever valid if it was chosen from (or already validated against) this same list.
+    private var compatibleDisplays: [ToolboxDisplay] {
+        guard let board = selectedBoard else { return catalog.displays }
+        return catalog.displays.filter { !Set($0.connectorPins).isDisjoint(with: board.connectorPins) }
+    }
+
+    var body: some View {
+        Section {
+            Picker("Driver Board", selection: $boardID) {
+                Text("Select driver board").tag(String?.none)
+                ForEach(catalog.driverBoards) { Text($0.name).tag(Optional($0.id)) }
+            }
+
+            Picker("Display", selection: $displayID) {
+                Text("Select display").tag(String?.none)
+                ForEach(compatibleDisplays) { Text($0.name).tag(Optional($0.id)) }
+            }
+            .disabled(selectedBoard == nil)
+
+            Picker("Power", selection: $powerID) {
+                Text("Select power option").tag(String?.none)
+                ForEach(catalog.powerOptions) { Text($0.name).tag(Optional($0.id)) }
+            }
+        }
+    }
+}
+
 private struct ToolboxPacketEditor: View {
     @Binding var packet: ToolboxPacket
     let definition: ToolboxPacketDefinition
+    let allowsDelete: Bool
     let onDelete: () -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -737,7 +827,9 @@ private struct ToolboxPacketEditor: View {
             Form {
                 Section {
                     ForEach(definition.fields) { field in
-                        if let choices = field.choices, !choices.isEmpty {
+                        if field.name.lowercased().hasPrefix("reserved") {
+                            EmptyView()
+                        } else if let choices = field.choices, !choices.isEmpty {
                             Picker(field.name.replacingOccurrences(of: "_", with: " ").capitalized,
                                    selection: choiceBinding(field.name)) {
                                 ForEach(choices.keys.sorted(by: { (Int($0) ?? 0) < (Int($1) ?? 0) }), id: \.self) { key in
@@ -781,8 +873,10 @@ private struct ToolboxPacketEditor: View {
                         }
                     }
                 }
-                Section {
-                    Button("Delete Packet", role: .destructive, action: onDelete)
+                if allowsDelete {
+                    Section {
+                        Button("Delete Packet", role: .destructive, action: onDelete)
+                    }
                 }
             }
             .navigationTitle(definition.name.replacingOccurrences(of: "_", with: " ").capitalized)
@@ -818,26 +912,63 @@ private struct ToolboxPacketEditor: View {
     private func decimalKey(_ raw: String?) -> String { String(integer(raw)) }
 }
 
+/// Mirrors `DeviceRowView`'s layout (name on the left, status on the right) so a connected
+/// display looks the same here as it does in the device picker list.
 private struct ToolboxConnectionStatus: View {
     @ObservedObject var device: ODDevice
 
     var body: some View {
-        LabeledContent("Device") {
-            VStack(alignment: .trailing, spacing: 3) {
+        HStack(spacing: 12) {
+            Image(systemName: "display")
+                .font(.title2)
+                .foregroundStyle(.blue)
+                .frame(width: 36)
+
+            VStack(alignment: .leading, spacing: 2) {
                 Text(device.name)
-                Label(statusText, systemImage: device.connectionState == .connected ? "checkmark.circle.fill" : "circle")
+                    .font(.headline)
+                if device.firmwareVersion != nil || device.config != nil {
+                    HStack(spacing: 4) {
+                        if let firmware = device.firmwareVersion {
+                            Text("FW v\(firmware)")
+                        }
+                        if device.firmwareVersion != nil, device.config != nil {
+                            Text("•")
+                        }
+                        if let config = device.config {
+                            Text("\(config.displayWidth)×\(config.displayHeight) • \(config.colorSchemeName)")
+                        }
+                    }
                     .font(.caption)
-                    .foregroundStyle(device.connectionState == .connected ? .green : .secondary)
+                    .foregroundStyle(.secondary)
+                }
             }
+
+            Spacer()
+
+            statusBadge
         }
+        .padding(.vertical, 4)
     }
 
-    private var statusText: String {
-        switch device.connectionState {
-        case .connected: "Connected"
-        case .connecting: "Connecting"
-        case .disconnected: "Disconnected"
-        case .failed: "Connection failed"
+    private var statusBadge: some View {
+        Group {
+            switch device.connectionState {
+            case .connected:
+                Label("Connected", systemImage: "checkmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+            case .connecting:
+                ProgressView().scaleEffect(0.7)
+            case .disconnected:
+                Label("Disconnected", systemImage: "circle")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            case .failed:
+                Label("Failed", systemImage: "exclamationmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
         }
     }
 }
@@ -845,27 +976,10 @@ private struct ToolboxConnectionStatus: View {
 private struct ToolboxConnectionSheet: View {
     @EnvironmentObject private var ble: BLEManager
     @Environment(\.dismiss) private var dismiss
-    @State private var namePrefix = "OD"
 
     var body: some View {
         NavigationStack {
-            Group {
-                switch ble.bluetoothState {
-                case .poweredOn: deviceList
-                case .poweredOff:
-                    ContentUnavailableView("Bluetooth Off", systemImage: "antenna.radiowaves.left.and.right.slash",
-                                           description: Text("Enable Bluetooth in Settings to connect."))
-                case .unauthorized:
-                    ContentUnavailableView("Bluetooth Access Denied", systemImage: "lock",
-                                           description: Text("Allow Bluetooth access in Settings."))
-                case .unsupported:
-                    ContentUnavailableView("Bluetooth Unavailable", systemImage: "antenna.radiowaves.left.and.right.slash")
-                case .resetting, .unknown:
-                    ProgressView("Initializing Bluetooth…")
-                @unknown default:
-                    ProgressView("Initializing Bluetooth…")
-                }
-            }
+            DevicePickerContent()
             .navigationTitle("Connect")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -875,9 +989,6 @@ private struct ToolboxConnectionSheet: View {
                         if ble.isScanning {
                             ble.stopScan()
                         } else {
-                            ble.namePrefixes = namePrefix.split(separator: ",").map {
-                                String($0).trimmingCharacters(in: .whitespacesAndNewlines)
-                            }
                             ble.startScan()
                         }
                     } label: {
@@ -887,35 +998,17 @@ private struct ToolboxConnectionSheet: View {
                     .disabled(ble.bluetoothState != .poweredOn)
                 }
             }
+            .onAppear {
+                ble.activate()
+                if ble.bluetoothState == .poweredOn { ble.startScan() }
+            }
+            .onChange(of: ble.bluetoothState) { _, state in
+                if state == .poweredOn, ble.connectedDevice == nil, !ble.isScanning {
+                    ble.startScan()
+                }
+            }
             .onChange(of: ble.connectedDevice) { _, device in if device != nil { dismiss() } }
             .onDisappear { ble.stopScan() }
         }
-    }
-
-    private var deviceList: some View {
-        List {
-            Section("Device Filter") {
-                TextField("OD (comma separated)", text: $namePrefix)
-                    .textInputAutocapitalization(.characters)
-                    .autocorrectionDisabled()
-            }
-            if ble.discoveredDevices.isEmpty {
-                ContentUnavailableView(
-                    ble.isScanning ? "Scanning…" : "Ready to Scan",
-                    systemImage: "antenna.radiowaves.left.and.right",
-                    description: Text(ble.isScanning ? "Looking for OpenDisplay devices." : "Tap Scan to look for nearby devices.")
-                )
-                .listRowBackground(Color.clear)
-            } else {
-                Section("OpenDisplay Devices") {
-                    ForEach(ble.discoveredDevices) { discovered in
-                        DeviceRowView(device: discovered)
-                            .contentShape(Rectangle())
-                            .onTapGesture { ble.connect(discovered) }
-                    }
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
     }
 }

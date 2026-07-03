@@ -12,12 +12,15 @@ The OpenDisplay web tools (Toolbox and Display Tool) run in a browser and commun
 
 ### Toolbox
 Configure and manage OpenDisplay hardware:
+- **YAML-driven configuration** — the bundled `config.yaml` is parsed by the same `js-yaml` logic as the website; hardware data comes from `simple-config-presets.json`
 - **Hardware wizard** — select your board (reTerminal, ESP32-S3, XIAO, etc.) and display panel (7.5", 2.9", 4.2", 9.7") to auto-fill resolution and color scheme
 - **Display configuration** — set width, height, color mode, refresh mode, and deep sleep
 - **Security** — lock the device with a random 128-bit PSK stored in the iOS Keychain; AES-128-CMAC authentication + optional AES-CCM session encryption
 - **WiFi** — configure SSID and password
-- **Device actions** — Read Config, Write Config, Reboot, Enter DFU / Bootloader
+- **Device actions** — Read Config, Write Config, and Reboot over Bluetooth
 - **Status log** — color-coded (info / success / error) timestamped log of all operations
+
+USB firmware flashing is intentionally outside the scope of the iOS Toolbox.
 
 ### Display Tool
 Upload images and control the display in real time:
@@ -54,7 +57,12 @@ OD App/
 ├── Protocol/
 │   ├── ODCommands.swift         ← Binary packet builders for every command
 │   ├── ODAuth.swift             ← AES-128-CMAC handshake, PSK Keychain storage, AES-CCM session
-│   └── ODConfig.swift           ← TLV config parse/serialize, CRC16-CCITT
+│   ├── ODConfig.swift           ← App-facing configuration boundary
+│   └── ToolboxConfigRuntime.swift ← JavaScriptCore bridge for YAML-driven Toolbox logic
+├── Resources/
+│   ├── config.yaml              ← Canonical Toolbox protocol schema
+│   ├── simple-config-presets.json ← Hardware, display, and power catalog
+│   └── toolbox-config-engine.js ← Schema-driven config build/parse/validation logic
 ├── Models/
 │   ├── ConfigModel.swift        ← ODConfigModel (display settings, WiFi, security)
 │   ├── DevicePreset.swift       ← Known hardware dimension presets
@@ -81,7 +89,7 @@ Commands are framed as:
 [2-byte opcode LE] [payload bytes…]
 ```
 
-Config data uses a TLV (Type-Length-Value) format with a CRC16-CCITT trailer. Authentication uses AES-128-CMAC; an optional encrypted session uses AES-CCM with a per-session nonce.
+Config data uses the packet layout defined by `Resources/config.yaml`, with a CRC16-CCITT trailer. Authentication uses AES-128-CMAC; an optional encrypted session uses AES-CCM with a per-session nonce.
 
 ---
 

@@ -56,6 +56,22 @@ struct AdvancedView: View {
                         Text("No device connected.").foregroundStyle(.secondary)
                     }
                 }
+
+                Section("About") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Open Display Utility")
+                        Text("Version \(AppInfo.version)")
+                        Link("https://www.opendisplay.org", destination: URL(string: "https://www.opendisplay.org")!)
+                        Link("Legal Notice", destination: URL(string: "https://www.opendisplay.org/impressum.html")!)
+                        Link("Privacy Policy", destination: URL(string: "https://www.opendisplay.org/datenschutz.html")!)
+                        Text("Copyright (c) 2026 by OpenDisplay.org")
+                    }
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .multilineTextAlignment(.leading)
+                    .padding(.vertical, 8)
+                }
             }
             .navigationTitle("Advanced")
             .navigationBarTitleDisplayMode(.inline)
