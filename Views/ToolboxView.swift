@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import CoreBluetooth
+import os
 
 struct ToolboxView: View {
     @EnvironmentObject private var ble: BLEManager
@@ -105,7 +106,6 @@ struct ToolboxView: View {
             if let error { addLog(error, type: .error) }
         }
         .onChange(of: ble.connectedDevice) { _, connected in
-            print("[diag] ble.connectedDevice changed; connected=\(connected != nil) writeAfterConnecting=\(writeAfterConnecting)")
             guard connected != nil else { return }
             showConnectionSheet = false
         }
@@ -114,13 +114,13 @@ struct ToolboxView: View {
         // hit the characteristic before it existed and just timed out. `connectionState` only
         // reaches `.connected` once `CoreBluetoothTransport.onReady` fires, so wait for that instead.
         .onChange(of: device?.connectionState) { _, state in
-            print("[diag] device.connectionState changed to \(String(describing: state)); writeAfterConnecting=\(writeAfterConnecting)")
+            ODLog.toolbox.debug("device.connectionState changed to \(String(describing: state), privacy: .public); writeAfterConnecting=\(writeAfterConnecting)")
             guard state == .connected, writeAfterConnecting else { return }
             configureProgress = 0.3
             writeAfterConnecting = false
             let shouldReboot = rebootAfterWrite
             rebootAfterWrite = false
-            print("[diag] deferred write firing now (rebootWhenDone=\(shouldReboot))")
+            ODLog.toolbox.info("deferred write firing now (rebootWhenDone=\(shouldReboot))")
             writeConfiguration(rebootWhenDone: shouldReboot)
         }
         .onChange(of: boardID) { _, _ in applyBoardDefaults() }
@@ -517,12 +517,12 @@ struct ToolboxView: View {
 
     private func writeConfiguration(rebootWhenDone: Bool = false) {
         guard let device else {
-            print("[diag] writeConfiguration called with no device; deferring")
+            ODLog.toolbox.warning("writeConfiguration called with no device; deferring")
             writeAfterConnecting = true
             showConnectionSheet = true
             return
         }
-        print("[diag] writeConfiguration starting; appState=\(device.connectionState) rebootWhenDone=\(rebootWhenDone)")
+        ODLog.toolbox.info("writeConfiguration starting; appState=\(String(describing: device.connectionState), privacy: .public) rebootWhenDone=\(rebootWhenDone)")
         guard encodedConfiguration != nil else {
             isConfiguring = false
             addLog("Configuration cannot be encoded", type: .error); return
@@ -531,7 +531,6 @@ struct ToolboxView: View {
         if isLocked, let key = Data(hexString: encryptionKey) { device.psk = key }
         suppressAdvancedModeOnConfigChange = true
         device.writeConfig(ODConfigModel(toolbox: configuration)) { succeeded in
-            print("[diag] writeConfig completion fired; succeeded=\(succeeded)")
             addLog(succeeded ? "Configuration written successfully" : "Configuration write failed",
                    type: succeeded ? .success : .error)
             if succeeded && rebootWhenDone {

@@ -22,6 +22,7 @@
 		010000000000000000000010 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000010 /* CoreBluetooth.framework */; };
 		010000000000000000000011 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000011 /* Security.framework */; };
 		010000000000000000000054 /* AdvancedSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000054 /* AdvancedSettingsView.swift */; };
+		010000000000000000000055 /* ODLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000055 /* ODLog.swift */; };
 		010000000000000000000021 /* ImageProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000021 /* ImageProcessor.swift */; };
 		010000000000000000000022 /* ToolboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000022 /* ToolboxView.swift */; };
 		010000000000000000000024 /* ODLogoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000024 /* ODLogoView.swift */; };
@@ -78,6 +79,7 @@
 		020000000000000000000012 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		020000000000000000000013 /* OD App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "OD App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		020000000000000000000054 /* AdvancedSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedSettingsView.swift; sourceTree = "<group>"; };
+		020000000000000000000055 /* ODLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODLog.swift; sourceTree = "<group>"; };
 		020000000000000000000021 /* ImageProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageProcessor.swift; sourceTree = "<group>"; };
 		020000000000000000000022 /* ToolboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolboxView.swift; sourceTree = "<group>"; };
 		020000000000000000000024 /* ODLogoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODLogoView.swift; sourceTree = "<group>"; };
@@ -203,6 +205,7 @@
 				020000000000000000000021 /* ImageProcessor.swift */,
 				020000000000000000000025 /* ToolboxData.swift */,
 				020000000000000000000026 /* AdvertisementData.swift */,
+				020000000000000000000055 /* ODLog.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -407,6 +410,7 @@
 				010000000000000000000053 /* SplashView.swift in Sources */,
 				010000000000000000000025 /* ToolboxData.swift in Sources */,
 				010000000000000000000026 /* AdvertisementData.swift in Sources */,
+				010000000000000000000055 /* ODLog.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

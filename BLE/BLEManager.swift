@@ -1,6 +1,7 @@
 import Foundation
 import CoreBluetooth
 import Combine
+import os
 
 final class BLEManager: NSObject, ObservableObject {
     @Published var bluetoothState: CBManagerState = .unknown
@@ -35,10 +36,10 @@ final class BLEManager: NSObject, ObservableObject {
     /// Creates Core Bluetooth only after the user explicitly asks to connect.
     func activate() {
         guard centralManager == nil else {
-            trace("activate reused central; state=\(centralManager?.state.rawValue ?? -1)")
+            trace("activate reused central; state=\(centralManager?.state.rawValue ?? -1)", level: .info)
             return
         }
-        trace("activate creating central")
+        trace("activate creating central", level: .info)
         centralManager = CBCentralManager(delegate: self, queue: .main)
     }
 
@@ -128,7 +129,7 @@ final class BLEManager: NSObject, ObservableObject {
     /// Reconnect to a previously-saved display by its peripheral identifier — no user scan needed
     /// when iOS still knows the peripheral. Falls back to a scan if it doesn't.
     func reconnect(to identifier: UUID) {
-        trace("reconnect requested id=\(identifier.uuidString); current=\(connectedDevice?.deviceID ?? "nil") appState=\(String(describing: connectedDevice?.connectionState)) peripheralState=\(connectedDevice?.peripheral.state.rawValue ?? -1)")
+        trace("reconnect requested id=\(identifier.uuidString); current=\(connectedDevice?.deviceID ?? "nil") appState=\(String(describing: connectedDevice?.connectionState)) peripheralState=\(connectedDevice?.peripheral.state.rawValue ?? -1)", level: .info)
         activate()
         connectionError = nil
         pendingReconnectID = identifier
@@ -165,7 +166,7 @@ final class BLEManager: NSObject, ObservableObject {
     private func attemptPendingReconnect() {
         guard let id = pendingReconnectID,
               let central = centralManager, central.state == .poweredOn else {
-            trace("reconnect deferred; pending=\(pendingReconnectID?.uuidString ?? "nil") centralState=\(centralManager?.state.rawValue ?? -1)")
+            trace("reconnect deferred; pending=\(pendingReconnectID?.uuidString ?? "nil") centralState=\(centralManager?.state.rawValue ?? -1)", level: .warning)
             return
         }
         if let peripheral = central.retrievePeripherals(withIdentifiers: [id]).first {
@@ -184,7 +185,7 @@ final class BLEManager: NSObject, ObservableObject {
 
 extension BLEManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        trace("central state changed: \(central.state.rawValue)")
+        trace("central state changed: \(central.state.rawValue)", level: .info)
         bluetoothState = central.state
         if central.state == .poweredOn { attemptPendingReconnect() }
     }
@@ -202,7 +203,7 @@ extension BLEManager: CBCentralManagerDelegate {
         guard let name = peripheral.name,
               namePrefixes.contains(where: { !$0.isEmpty && name.hasPrefix($0) }) else { return }
         let msd = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
-        print("[BLE] discovered \(name) rssi=\(RSSI.intValue) msd=\(msd?.hexString ?? "nil")")
+        ODLog.ble.debug("discovered \(name, privacy: .public) rssi=\(RSSI.intValue) msd=\(msd?.hexString ?? "nil", privacy: .public)")
         let device = DiscoveredDevice(peripheral: peripheral, rssi: RSSI.intValue, msd: msd)
         if let idx = discoveredDevices.firstIndex(where: { $0.id == device.id }) {
             discoveredDevices[idx].rssi = RSSI.intValue
@@ -213,7 +214,7 @@ extension BLEManager: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        trace("didConnect id=\(peripheral.identifier.uuidString) name=\(peripheral.name ?? "nil") peripheralState=\(peripheral.state.rawValue)")
+        trace("didConnect id=\(peripheral.identifier.uuidString) name=\(peripheral.name ?? "nil") peripheralState=\(peripheral.state.rawValue)", level: .info)
         let advertisedMSD = discoveredDevices.first(where: {
             $0.peripheral.identifier == peripheral.identifier
         })?.msd
@@ -260,7 +261,7 @@ extension BLEManager: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        trace("didFailToConnect id=\(peripheral.identifier.uuidString); state=\(peripheral.state.rawValue); error=\(error?.localizedDescription ?? "unknown error")")
+        trace("didFailToConnect id=\(peripheral.identifier.uuidString); state=\(peripheral.state.rawValue); error=\(error?.localizedDescription ?? "unknown error")", level: .error)
         connectionError = error?.localizedDescription ?? "The display could not be reached."
         reconnectingPeripheral = nil
         deviceMap[peripheral.identifier]?.connectionState = .failed
@@ -275,7 +276,7 @@ extension BLEManager: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        trace("didDisconnect id=\(peripheral.identifier.uuidString); state=\(peripheral.state.rawValue); error=\(error?.localizedDescription ?? "nil")")
+        trace("didDisconnect id=\(peripheral.identifier.uuidString); state=\(peripheral.state.rawValue); error=\(error?.localizedDescription ?? "nil")", level: .info)
         deviceMap[peripheral.identifier]?.didDisconnect()
         if let idx = discoveredDevices.firstIndex(where: { $0.peripheral.identifier == peripheral.identifier }) {
             discoveredDevices[idx].connectionState = .disconnected
@@ -290,9 +291,9 @@ extension BLEManager: CBCentralManagerDelegate {
 }
 
 extension BLEManager {
-    func trace(_ message: String) {
+    func trace(_ message: String, level: OSLogType = .debug) {
         let entry = LogEntry(direction: .system, data: Data(), label: message)
-        print("[BLETrace] \(message)")
+        ODLog.ble.log(level: level, "\(message, privacy: .public)")
         if Thread.isMainThread {
             appendLog(entry)
         } else {
