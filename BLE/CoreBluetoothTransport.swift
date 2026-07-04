@@ -29,7 +29,7 @@ final class CoreBluetoothTransport {
 
     func write(_ data: Data, completion: @escaping WriteCompletion) {
         dispatchPrecondition(condition: .onQueue(.main))
-        trace("write() queued \(data.count) bytes; queueDepthBefore=\(writes.count), characteristic=\(characteristic?.uuid.uuidString ?? "nil"), canSendWriteWithoutResponse=\(peripheral.canSendWriteWithoutResponse)")
+        traceVerbose("write() queued \(data.count) bytes; queueDepthBefore=\(writes.count), characteristic=\(characteristic?.uuid.uuidString ?? "nil"), canSendWriteWithoutResponse=\(peripheral.canSendWriteWithoutResponse)")
         writes.append((data, completion))
         drainWrites()
     }
@@ -52,7 +52,7 @@ final class CoreBluetoothTransport {
                 continue
             }
             peripheral.writeValue(next.data, for: characteristic, type: .withoutResponse)
-            trace("drainWrites: wrote \(next.data.count) bytes; remainingQueue=\(writes.count)")
+            traceVerbose("drainWrites: wrote \(next.data.count) bytes; remainingQueue=\(writes.count)")
             next.completion(nil)
         }
     }
@@ -151,6 +151,13 @@ final class CoreBluetoothTransport {
     }
 
     private func trace(_ message: String) {
+        onTrace?(message)
+    }
+
+    /// High-frequency, per-write traces. Silent in normal use so image uploads (hundreds of
+    /// writes) don't flood the log; enable with the `BLELogging.detailedPayloads` debug launch flag.
+    private func traceVerbose(_ message: String) {
+        guard BLELogging.detailedPayloads else { return }
         onTrace?(message)
     }
 
