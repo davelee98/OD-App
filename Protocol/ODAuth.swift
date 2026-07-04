@@ -5,7 +5,7 @@ import os
 /// Native credential storage only. Authentication and session encryption are handled by
 /// the verbatim `ble-common.js` implementation in `OpenDisplayJSRuntime`.
 struct ODAuth {
-    private static let log = Logger(subsystem: "org.opendisplay.app", category: "auth")
+    private static let log = ODLog.auth
 
     static func savePSK(_ psk: Data, forDevice deviceID: String) {
         let query: [CFString: Any] = [

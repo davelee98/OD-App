@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
+import os
 
 // MARK: - Website resource models
 
@@ -188,6 +189,7 @@ enum ToolboxResources {
         guard let url = Bundle.main.url(forResource: name, withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let value = try? JSONDecoder().decode(T.self, from: data) else {
+            ODLog.toolbox.critical("Missing or invalid bundled Toolbox resource: \(name, privacy: .public).json")
             fatalError("Missing or invalid bundled Toolbox resource: \(name).json")
         }
         return value
@@ -265,7 +267,7 @@ struct ToolboxConfiguration: Codable, Equatable {
         }
     }
 
-    mutating func remove(type: Int, autoSecurityOnly: Bool = false) {
+    mutating func remove(type: Int) {
         packets.removeAll { $0.packetType == type }
     }
 }

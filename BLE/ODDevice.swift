@@ -1,6 +1,7 @@
 import Foundation
 import CoreBluetooth
 import Combine
+import os
 
 /// Observable app-facing device. Core Bluetooth owns the radio; `ble-common.js` owns the protocol.
 final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
@@ -71,7 +72,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     // MARK: - GATT lifecycle
 
     func discoverServices() {
-        trace("ODDevice discoverServices; appState=\(connectionState), peripheralState=\(peripheral.state.rawValue), runtimeReady=\(runtime != nil)")
+        trace("ODDevice discoverServices; appState=\(connectionState), peripheralState=\(peripheral.state.rawValue), runtimeReady=\(runtime != nil)", level: .info)
         guard runtime != nil else {
             lastError = "ble-common.js runtime is unavailable"
             connectionState = .failed
@@ -122,7 +123,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     private func configureTransport() {
         transport.onReady = { [weak self] in
             guard let self else { return }
-            self.trace("GATT ready; changing appState \(self.connectionState) → connected")
+            self.trace("GATT ready; changing appState \(self.connectionState) → connected", level: .info)
             self.runtime?.setConnected(true)
             self.connectionState = .connected
             self.readFirmware()
@@ -139,7 +140,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             self.runtime?.receiveNotification(data)
         }
         transport.onError = { [weak self] message in
-            self?.trace("transport error; changing appState to failed: \(message)")
+            self?.trace("transport error; changing appState to failed: \(message)", level: .error)
             self?.lastError = message
             self?.connectionState = .failed
         }
@@ -162,7 +163,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - Core commands
 
-    func sendRaw(_ data: Data, label: String? = nil, completion: ((Data) -> Void)? = nil) {
+    func sendRaw(_ data: Data, label: String? = nil, completion: ((Result<Void, Error>) -> Void)? = nil) {
         // Trace the labeled send so BLE Tester entries keep their names — the runtime's `onWrite`
         // logs the raw GATT bytes with `label: nil`, so this is the only place the caller's intent
         // is preserved. (A trace, not an appendLog, to avoid double-logging the same packet.)
@@ -170,11 +171,13 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         call("sendHex", arguments: ["hex": data.hexString.replacingOccurrences(of: " ", with: "")]) { [weak self] result in
             switch result {
             case .success:
-                completion?(Data())
+                completion?(.success(()))
             case .failure(let error):
-                // Never silently drop a send failure — surface it like the other command paths do.
-                self?.trace("sendRaw \(label ?? "raw") failed: \(error.localizedDescription)")
+                // Never silently drop a send failure — surface it like the other command paths do,
+                // and always report it back to the caller's completion.
+                self?.trace("sendRaw \(label ?? "raw") failed: \(error.localizedDescription)", level: .error)
                 self?.lastError = error.localizedDescription
+                completion?(.failure(error))
             }
         }
     }
@@ -242,7 +245,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             switch result {
             case .success(let value):
                 guard let hex = value["hex"] as? String, let bytes = Data(hexString: hex) else {
-                    self.trace("readConfig completed but ble-common.js returned no hex payload; value=\(value)")
+                    self.trace("readConfig completed but ble-common.js returned no hex payload; value=\(value)", level: .warning)
                     let message = "ble-common.js returned an invalid configuration"
                     self.lastError = message
                     finish(.failure(ODDeviceError(message)))
@@ -259,13 +262,13 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     self.reparseAdvertisement()
                     finish(.success(model))
                 } catch {
-                    self.trace("readConfig decode failed: \(error.localizedDescription); rawHex=\(hex)")
+                    self.trace("readConfig decode failed: \(error.localizedDescription); rawHex=\(hex)", level: .error)
                     self.lastError = "Configuration parsing failed: \(error.localizedDescription)"
                     self.configReadProgress = 0
                     finish(.failure(error))
                 }
             case .failure(let error):
-                self.trace("readConfig failed: \(error.localizedDescription)")
+                self.trace("readConfig failed: \(error.localizedDescription)", level: .error)
                 self.lastError = error.localizedDescription
                 self.configReadProgress = 0
                 finish(.failure(error))
@@ -283,7 +286,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             guard let self else { return }
             self.trace("readConfig STALL WATCHDOG: no response 10s after request; " +
                        "progress=\(self.configReadProgress), appState=\(self.connectionState), " +
-                       "peripheralState=\(self.peripheral.state.rawValue)")
+                       "peripheralState=\(self.peripheral.state.rawValue)", level: .error)
             self.lastError = "Reading configuration timed out. The device stopped responding."
             self.configReadProgress = 0
             onTimeout()
@@ -296,7 +299,16 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// handling has no timeout, so a device that stops responding mid-write would otherwise leave
     /// this `completion` never called and no status ever reported — success or failure.
     func writeConfig(_ model: ODConfigModel, completion: ((Bool) -> Void)? = nil) {
-        let data = ODConfig.serialize(model)
+        let data: Data
+        do {
+            data = try ODConfig.serialize(model)
+        } catch {
+            // Surface the real encode/validation message instead of silently writing 0 bytes.
+            lastError = error.localizedDescription
+            trace("writeConfig serialize failed: \(error.localizedDescription)", level: .error)
+            completion?(false)
+            return
+        }
         guard !data.isEmpty else {
             lastError = "Could not build Toolbox configuration"
             completion?(false)
@@ -327,7 +339,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             let command = notification[notification.startIndex + 1]
             guard command == 0x41 || command == 0x42 else { return }
             if responseType == 0xFF {
-                self?.trace("writeConfig chunk NACK received (command=0x\(String(format: "%02X", command)))")
+                self?.trace("writeConfig chunk NACK received (command=0x\(String(format: "%02X", command)))", level: .error)
                 finish(false)
                 return
             }
@@ -354,7 +366,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 self?.config = model
                 finish(true)
             case .failure(let error):
-                self?.trace("writeConfig failed: \(error.localizedDescription)")
+                self?.trace("writeConfig failed: \(error.localizedDescription)", level: .error)
                 self?.lastError = error.localizedDescription
                 finish(false)
             }
@@ -366,7 +378,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.trace("writeConfig STALL WATCHDOG: no response 10s after request; " +
-                       "appState=\(self.connectionState), peripheralState=\(self.peripheral.state.rawValue)")
+                       "appState=\(self.connectionState), peripheralState=\(self.peripheral.state.rawValue)", level: .error)
             self.lastError = "Writing configuration timed out. The device stopped responding."
             onTimeout()
         }
@@ -398,18 +410,6 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - Device controls
 
-    func sendLEDPattern(brightness: Int, colors: [LEDColor], repeats: Int) {
-        sendRaw(ODCommands.ledPattern(brightness: brightness, colors: colors, repeats: repeats),
-                label: "LED Pattern")
-    }
-
-    func stopLED() { sendRaw(ODCommands.ledStop(), label: "LED Stop") }
-
-    func sendBuzzerPattern(instance: UInt8 = 0, repeats: Int, steps: [BuzzerStep]) {
-        sendRaw(ODCommands.buzzerPattern(instance: instance, repeats: repeats, steps: steps),
-                label: "Buzzer Pattern")
-    }
-
     func writeNFC(type: UInt8, payload: Data) {
         let chunkSize = 120
         if payload.count <= chunkSize {
@@ -434,7 +434,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 height: config.displayHeight,
                 colorScheme: config.colorScheme
             )
-            print("[BLE] packed image colorScheme=\(config.colorScheme) bytes=\(pixelData.count) expected=\(expected)")
+            ODLog.imaging.debug("packed image colorScheme=\(config.colorScheme) bytes=\(pixelData.count) expected=\(expected)")
             guard pixelData.count == expected else {
                 lastError = "Packed image has \(pixelData.count) bytes; color scheme \(config.colorScheme) requires \(expected)"
                 return
@@ -475,7 +475,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             guard let self else { return }
             self.trace("uploadImage STALL WATCHDOG: no progress 30s; " +
                        "progress=\(self.uploadProgress), appState=\(self.connectionState), " +
-                       "peripheralState=\(self.peripheral.state.rawValue)")
+                       "peripheralState=\(self.peripheral.state.rawValue)", level: .error)
             self.lastError = "Image upload timed out. The device stopped responding."
             self.isUploading = false
             self.uploadProgress = 0
@@ -508,7 +508,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         case "error":
             lastError = payload["message"] as? String ?? "Unknown ble-common.js error"
         case "log":
-            if let message = payload["message"] as? String { print("[ble-common] \(message)") }
+            if let message = payload["message"] as? String { ODLog.proto.debug("\(message, privacy: .public)") }
         case "uploadProgress":
             let progress = (payload["progress"] as? NSNumber)?.doubleValue ?? 0
             let total = max(1, (payload["total"] as? NSNumber)?.doubleValue ?? 1)
@@ -551,13 +551,13 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         guard BLELogging.detailedPayloads || !isImageChunk else { return }
         let entry = LogEntry(direction: direction, data: data, label: label)
         let arrow = direction == .sent ? "→" : "←"
-        print("[BLE] \(arrow) \(label ?? "") \(data.hexString)")
+        ODLog.ble.debug("\(arrow, privacy: .public) \(label ?? "", privacy: .public) \(data.hexString, privacy: .public)")
         logHandler(entry)
     }
 
-    private func trace(_ message: String) {
+    private func trace(_ message: String, level: OSLogType = .debug) {
         let message = "[\(deviceID.prefix(8))] \(message)"
-        print("[BLETrace] \(message)")
+        ODLog.ble.log(level: level, "\(message, privacy: .public)")
         logHandler(LogEntry(direction: .system, data: Data(), label: message))
     }
 

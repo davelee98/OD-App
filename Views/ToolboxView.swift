@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import CoreBluetooth
+import os
 
 struct ToolboxView: View {
     @EnvironmentObject private var ble: BLEManager
@@ -33,6 +34,13 @@ struct ToolboxView: View {
     @State private var configureProgress = 0.0
     @State private var statusLog: [StatusEntry] = []
     @State private var suppressAdvancedModeOnConfigChange = false
+
+    // Cached JavaScriptCore-derived outputs. Recomputed only when `configuration` or the active
+    // schema changes (see `recomputeDerivedConfiguration`), rather than on every body evaluation —
+    // ToolboxView re-renders on every BLE notification, and each encode/validate is a synchronous
+    // main-thread JS round-trip.
+    @State private var encodedConfiguration: Data?
+    @State private var configurationValidation: ToolboxValidation?
 
     enum Mode: String, CaseIterable, Identifiable {
         case simple = "Simple Setup"
@@ -70,7 +78,12 @@ struct ToolboxView: View {
         }
         .navigationTitle("OpenDisplay Device Configuration")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear(perform: loadDeviceConfiguration)
+        .onAppear {
+            loadDeviceConfiguration()
+            recomputeDerivedConfiguration()
+        }
+        .onChange(of: configuration) { _, _ in recomputeDerivedConfiguration() }
+        .onChange(of: schemaText) { _, _ in recomputeDerivedConfiguration() }
         // `.onReceive` with a publisher built fresh on every `body` evaluation (the old
         // `deviceConfigPublisher`/`deviceErrorPublisher` computed properties) resubscribes each
         // render, and `@Published` always replays its *current* value to a new subscriber. That
@@ -105,7 +118,6 @@ struct ToolboxView: View {
             if let error { addLog(error, type: .error) }
         }
         .onChange(of: ble.connectedDevice) { _, connected in
-            print("[diag] ble.connectedDevice changed; connected=\(connected != nil) writeAfterConnecting=\(writeAfterConnecting)")
             guard connected != nil else { return }
             showConnectionSheet = false
         }
@@ -114,13 +126,13 @@ struct ToolboxView: View {
         // hit the characteristic before it existed and just timed out. `connectionState` only
         // reaches `.connected` once `CoreBluetoothTransport.onReady` fires, so wait for that instead.
         .onChange(of: device?.connectionState) { _, state in
-            print("[diag] device.connectionState changed to \(String(describing: state)); writeAfterConnecting=\(writeAfterConnecting)")
+            ODLog.toolbox.debug("device.connectionState changed to \(String(describing: state), privacy: .public); writeAfterConnecting=\(writeAfterConnecting)")
             guard state == .connected, writeAfterConnecting else { return }
             configureProgress = 0.3
             writeAfterConnecting = false
             let shouldReboot = rebootAfterWrite
             rebootAfterWrite = false
-            print("[diag] deferred write firing now (rebootWhenDone=\(shouldReboot))")
+            ODLog.toolbox.info("deferred write firing now (rebootWhenDone=\(shouldReboot))")
             writeConfiguration(rebootWhenDone: shouldReboot)
         }
         .onChange(of: boardID) { _, _ in applyBoardDefaults() }
@@ -463,6 +475,9 @@ struct ToolboxView: View {
                         Button("Apply") {
                             do {
                                 schema = try ToolboxResources.decodeSchema(schemaText)
+                                // Apply updates the runtime's active schema but not `schemaText`
+                                // (it is the input), so re-encode explicitly here.
+                                recomputeDerivedConfiguration()
                                 addLog("Custom schema applied", type: .success)
                                 showSchemaEditor = false
                             } catch { addLog(error.localizedDescription, type: .error) }
@@ -517,12 +532,12 @@ struct ToolboxView: View {
 
     private func writeConfiguration(rebootWhenDone: Bool = false) {
         guard let device else {
-            print("[diag] writeConfiguration called with no device; deferring")
+            ODLog.toolbox.warning("writeConfiguration called with no device; deferring")
             writeAfterConnecting = true
             showConnectionSheet = true
             return
         }
-        print("[diag] writeConfiguration starting; appState=\(device.connectionState) rebootWhenDone=\(rebootWhenDone)")
+        ODLog.toolbox.info("writeConfiguration starting; appState=\(String(describing: device.connectionState), privacy: .public) rebootWhenDone=\(rebootWhenDone)")
         guard encodedConfiguration != nil else {
             isConfiguring = false
             addLog("Configuration cannot be encoded", type: .error); return
@@ -531,7 +546,6 @@ struct ToolboxView: View {
         if isLocked, let key = Data(hexString: encryptionKey) { device.psk = key }
         suppressAdvancedModeOnConfigChange = true
         device.writeConfig(ODConfigModel(toolbox: configuration)) { succeeded in
-            print("[diag] writeConfig completion fired; succeeded=\(succeeded)")
             addLog(succeeded ? "Configuration written successfully" : "Configuration write failed",
                    type: succeeded ? .success : .error)
             if succeeded && rebootWhenDone {
@@ -660,10 +674,12 @@ struct ToolboxView: View {
         }
     }
 
-    private var encodedConfiguration: Data? { try? ToolboxPacketCodec.encode(configuration, schema: schema) }
-
-    private var configurationValidation: ToolboxValidation? {
-        try? ToolboxConfigRuntime.shared.validate(configuration)
+    /// Refreshes the cached `encodedConfiguration`/`configurationValidation` by running the two
+    /// JavaScriptCore round-trips once. Called from `.onAppear`, `.onChange(of: configuration)`,
+    /// `.onChange(of: schemaText)`, and after a schema Apply — never from `body`.
+    private func recomputeDerivedConfiguration() {
+        encodedConfiguration = try? ToolboxPacketCodec.encode(configuration, schema: schema)
+        configurationValidation = try? ToolboxConfigRuntime.shared.validate(configuration)
     }
 
     private var shareURL: URL? {

@@ -2,6 +2,7 @@ import Foundation
 import JavaScriptCore
 import CryptoSwift
 import Security
+import os
 
 enum BLELogging {
     /// Enable in a Debug scheme with the launch argument `-BLEVerbosePayloadLogging`.
@@ -77,14 +78,14 @@ final class OpenDisplayJSRuntime {
         nextOperationID += 1
         if let completion { completions[id] = completion }
 
-        print("[OpenDisplayJSRuntime] call #\(id) \(operation) dispatching to __odCall")
+        ODLog.proto.debug("call #\(id) \(operation, privacy: .public) dispatching to __odCall")
         do {
             let data = try JSONSerialization.data(withJSONObject: arguments)
             let json = String(decoding: data, as: UTF8.self)
             context.objectForKeyedSubscript("__odCall")?.call(withArguments: [id, operation, json])
-            print("[OpenDisplayJSRuntime] call #\(id) \(operation) __odCall returned (JS runs async from here)")
+            ODLog.proto.debug("call #\(id) \(operation, privacy: .public) __odCall returned (JS runs async from here)")
         } catch {
-            print("[OpenDisplayJSRuntime] call #\(id) \(operation) failed to serialize arguments: \(error)")
+            ODLog.proto.warning("call #\(id) \(operation, privacy: .public) failed to serialize arguments: \(error.localizedDescription, privacy: .public)")
             completions.removeValue(forKey: id)?(.failure(error))
         }
         return id
@@ -120,17 +121,17 @@ final class OpenDisplayJSRuntime {
             guard let id = Self.integer(object["id"]),
                   let hex = object["hex"] as? String,
                   let data = Data(hexString: hex) else {
-                print("[OpenDisplayJSRuntime] JS write invocation malformed: \(json)")
+                ODLog.proto.warning("JS write invocation malformed: \(json, privacy: .public)")
                 return
             }
-            print("[OpenDisplayJSRuntime] JS requested BLE write id=\(id) bytes=\(data.count)")
+            ODLog.proto.debug("JS requested BLE write id=\(id) bytes=\(data.count)")
             guard let onWrite else {
-                print("[OpenDisplayJSRuntime] JS write id=\(id) failed: onWrite handler unavailable")
+                ODLog.proto.warning("JS write id=\(id) failed: onWrite handler unavailable")
                 resolveWrite(id: id, error: RuntimeError.transportUnavailable.localizedDescription)
                 return
             }
             onWrite(data) { [weak self] error in
-                print("[OpenDisplayJSRuntime] JS write id=\(id) transport completion: error=\(error?.localizedDescription ?? "nil")")
+                ODLog.proto.debug("JS write id=\(id) transport completion: error=\(error?.localizedDescription ?? "nil", privacy: .public)")
                 self?.resolveWrite(id: id, error: error?.localizedDescription)
             }
         case "scheduleTimer":
@@ -151,7 +152,7 @@ final class OpenDisplayJSRuntime {
 
         if type == "operation", let id = Self.integer(payload["id"]) {
             let ok = (payload["ok"] as? Bool) == true
-            print("[OpenDisplayJSRuntime] operation #\(id) resolved ok=\(ok) error=\(payload["error"] ?? "nil")")
+            ODLog.proto.debug("operation #\(id) resolved ok=\(ok) error=\(String(describing: payload["error"] ?? "nil"), privacy: .public)")
             if let completion = completions.removeValue(forKey: id) {
                 if ok {
                     completion(.success(payload["result"] as? [String: Any] ?? [:]))
@@ -159,12 +160,12 @@ final class OpenDisplayJSRuntime {
                     completion(.failure(RuntimeError.operationFailed(payload["error"] as? String ?? "Unknown error")))
                 }
             } else {
-                print("[OpenDisplayJSRuntime] operation #\(id) resolved but no completion was registered (already consumed or unknown id)")
+                ODLog.proto.warning("operation #\(id) resolved but no completion was registered (already consumed or unknown id)")
             }
             return
         }
         if type != "log" {
-            print("[OpenDisplayJSRuntime] event type=\(type) payload=\(payload)")
+            ODLog.proto.debug("event type=\(type, privacy: .public) payload=\(String(describing: payload), privacy: .public)")
         }
         onEvent?(type, payload)
     }
@@ -253,7 +254,7 @@ private final class NativeBridge: NSObject, OpenDisplayNativeBridgeExports {
         // messages by default while retaining them behind the Debug launch flag.
         let isImageChunk = message.hasPrefix("CMD> 0071") || message.hasPrefix("BLE< 00 71")
         guard BLELogging.detailedPayloads || !isImageChunk else { return }
-        print("[ble-common] \(message)")
+        ODLog.proto.debug("\(message, privacy: .public)")
     }
 }
 

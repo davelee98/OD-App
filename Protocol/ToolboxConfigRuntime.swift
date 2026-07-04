@@ -1,12 +1,16 @@
 import Foundation
 import JavaScriptCore
+import os
 
 /// Executes the website Toolbox's schema, codec, and simple-preset logic in JavaScriptCore.
 /// Swift owns presentation and BLE transport; config.yaml remains the protocol source of truth.
 final class ToolboxConfigRuntime {
     static let shared: ToolboxConfigRuntime = {
         do { return try ToolboxConfigRuntime() }
-        catch { fatalError("Could not initialize Toolbox configuration runtime: \(error.localizedDescription)") }
+        catch {
+            ODLog.toolbox.critical("Could not initialize Toolbox configuration runtime: \(error.localizedDescription, privacy: .public)")
+            fatalError("Could not initialize Toolbox configuration runtime: \(error.localizedDescription)")
+        }
     }()
 
     private let context: JSContext
@@ -100,10 +104,10 @@ final class ToolboxConfigRuntime {
         // (decode, on config read). Tracing entry/exit + duration here pinpoints whether a freeze
         // is this JS call blocking the main thread versus something purely in SwiftUI.
         let start = Date()
-        print("[ToolboxConfigRuntime] → \(operation) start")
+        ODLog.toolbox.debug("→ \(operation, privacy: .public) start")
         defer {
             let elapsed = Date().timeIntervalSince(start)
-            print("[ToolboxConfigRuntime] ← \(operation) end (\(String(format: "%.3f", elapsed))s)")
+            ODLog.toolbox.debug("← \(operation, privacy: .public) end (\(String(format: "%.3f", elapsed), privacy: .public)s)")
         }
         let data = try JSONSerialization.data(withJSONObject: arguments)
         let json = String(decoding: data, as: UTF8.self)
