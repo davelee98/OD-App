@@ -7,15 +7,13 @@ import CoreImage.CIFilterBuiltins
 
 /// Intuitive photo adjustments applied *before* dithering. Every field is neutral at its default,
 /// so `.neutral` passes an image through unchanged. High-contrast, dithered e-ink output benefits
-/// measurably from tonal recovery (shadows/highlights), gentle brightness/contrast, a light unsharp
-/// pass, and — on color panels — saturation. Equatable so a single SwiftUI `.onChange` can drive the
-/// live canvas refresh.
+/// measurably from tonal recovery (shadows/highlights), gentle brightness/contrast, and — on color
+/// panels — saturation. Equatable so a single SwiftUI `.onChange` can drive the live canvas refresh.
 struct ImageAdjustments: Equatable {
     var brightness: Float = 0     // CIColorControls.brightness             slider -0.4...0.4
     var contrast:   Float = 1     // CIColorControls.contrast               slider 0.5...1.5
     var shadows:    Float = 0     // CIHighlightShadowAdjust.shadowAmount   slider -1...1
     var highlights: Float = 1     // CIHighlightShadowAdjust.highlightAmount slider 0.3...1 (1 = neutral)
-    var sharpness:  Float = 0     // CIUnsharpMask.intensity                slider 0...2 (0 = off)
     var saturation: Float = 1     // CIColorControls.saturation             slider 0...2 (color schemes only)
     static let neutral = ImageAdjustments()
     var isNeutral: Bool { self == .neutral }
@@ -127,8 +125,8 @@ enum ImageProcessor {
     private static let ciContext = CIContext(options: nil)
 
     /// Apply intuitive photo adjustments *before* dithering. `.neutral` (all fields at their default)
-    /// passes the image through unchanged. Filter order is tonal recovery → color → sharpen:
-    /// **CIHighlightShadowAdjust → CIColorControls → CIUnsharpMask**. High-contrast, dithered e-ink
+    /// passes the image through unchanged. Filter order is tonal recovery → color:
+    /// **CIHighlightShadowAdjust → CIColorControls**. High-contrast, dithered e-ink
     /// panels benefit from these before quantization.
     static func adjust(_ image: UIImage, adjustments: ImageAdjustments) -> UIImage {
         guard !adjustments.isNeutral, let cgImage = image.cgImage else { return image }
@@ -154,17 +152,7 @@ enum ImageProcessor {
             ci = colorControls.outputImage ?? ci
         }
 
-        // 3. Sharpen last. Radius scales with image size so the ≤1600px preview and the full-res
-        // final render sharpen by the same *visual* amount.
-        if adjustments.sharpness != 0 {
-            let unsharp = CIFilter.unsharpMask()
-            unsharp.inputImage = ci
-            unsharp.intensity = adjustments.sharpness
-            unsharp.radius = Float(2.5 * max(extent.width, extent.height) / 1600)
-            ci = unsharp.outputImage ?? ci
-        }
-
-        // Crop back to the original extent — CIUnsharpMask / CIHighlightShadowAdjust expand it, and
+        // Crop back to the original extent — CIHighlightShadowAdjust can expand it, and
         // packing depends on exact pixel dimensions.
         guard let out = ciContext.createCGImage(ci, from: extent) else { return image }
         return UIImage(cgImage: out, scale: image.scale, orientation: image.imageOrientation)
