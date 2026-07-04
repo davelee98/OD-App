@@ -265,7 +265,7 @@ struct ToolboxConfiguration: Codable, Equatable {
         }
     }
 
-    mutating func remove(type: Int, autoSecurityOnly: Bool = false) {
+    mutating func remove(type: Int) {
         packets.removeAll { $0.packetType == type }
     }
 }

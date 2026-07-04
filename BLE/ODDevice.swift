@@ -398,18 +398,6 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - Device controls
 
-    func sendLEDPattern(brightness: Int, colors: [LEDColor], repeats: Int) {
-        sendRaw(ODCommands.ledPattern(brightness: brightness, colors: colors, repeats: repeats),
-                label: "LED Pattern")
-    }
-
-    func stopLED() { sendRaw(ODCommands.ledStop(), label: "LED Stop") }
-
-    func sendBuzzerPattern(instance: UInt8 = 0, repeats: Int, steps: [BuzzerStep]) {
-        sendRaw(ODCommands.buzzerPattern(instance: instance, repeats: repeats, steps: steps),
-                label: "Buzzer Pattern")
-    }
-
     func writeNFC(type: UInt8, payload: Data) {
         let chunkSize = 120
         if payload.count <= chunkSize {
