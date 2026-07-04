@@ -3,6 +3,24 @@ import UIKit
 import CoreImage
 import CoreImage.CIFilterBuiltins
 
+// MARK: - Image Adjustments
+
+/// Intuitive photo adjustments applied *before* dithering. Every field is neutral at its default,
+/// so `.neutral` passes an image through unchanged. High-contrast, dithered e-ink output benefits
+/// measurably from tonal recovery (shadows/highlights), gentle brightness/contrast, a light unsharp
+/// pass, and — on color panels — saturation. Equatable so a single SwiftUI `.onChange` can drive the
+/// live canvas refresh.
+struct ImageAdjustments: Equatable {
+    var brightness: Float = 0     // CIColorControls.brightness             slider -0.4...0.4
+    var contrast:   Float = 1     // CIColorControls.contrast               slider 0.5...1.5
+    var shadows:    Float = 0     // CIHighlightShadowAdjust.shadowAmount   slider -1...1
+    var highlights: Float = 1     // CIHighlightShadowAdjust.highlightAmount slider 0.3...1 (1 = neutral)
+    var sharpness:  Float = 0     // CIUnsharpMask.intensity                slider 0...2 (0 = off)
+    var saturation: Float = 1     // CIColorControls.saturation             slider 0...2 (color schemes only)
+    static let neutral = ImageAdjustments()
+    var isNeutral: Bool { self == .neutral }
+}
+
 // MARK: - Dithering Mode
 
 enum DitheringMode: String, CaseIterable, Identifiable {
@@ -104,44 +122,51 @@ enum ImageProcessor {
         return uiImage(from: pixels, width: width, height: height)
     }
 
-    // MARK: - Exposure / Brightness / Contrast (Core Image)
+    // MARK: - Adjustments (Core Image)
 
     private static let ciContext = CIContext(options: nil)
 
-    /// Apply intuitive photo adjustments *before* dithering. Values are neutral at their defaults
-    /// (`exposureEV` 0, `brightness` 0, `contrast` 1) so an unadjusted image passes through
-    /// unchanged. High-contrast e-ink panels benefit from these before quantization.
-    /// - Parameters:
-    ///   - exposureEV: stops of exposure, roughly -2...+2.
-    ///   - brightness: additive brightness, roughly -0.5...+0.5.
-    ///   - contrast: multiplicative contrast, roughly 0.5...1.5 (1 = unchanged).
-    static func adjust(_ image: UIImage,
-                       exposureEV: Float = 0,
-                       brightness: Float = 0,
-                       contrast: Float = 1) -> UIImage {
-        guard exposureEV != 0 || brightness != 0 || contrast != 1,
-              let cgImage = image.cgImage else { return image }
+    /// Apply intuitive photo adjustments *before* dithering. `.neutral` (all fields at their default)
+    /// passes the image through unchanged. Filter order is tonal recovery → color → sharpen:
+    /// **CIHighlightShadowAdjust → CIColorControls → CIUnsharpMask**. High-contrast, dithered e-ink
+    /// panels benefit from these before quantization.
+    static func adjust(_ image: UIImage, adjustments: ImageAdjustments) -> UIImage {
+        guard !adjustments.isNeutral, let cgImage = image.cgImage else { return image }
+        let extent = CIImage(cgImage: cgImage).extent
         var ci = CIImage(cgImage: cgImage)
 
-        if exposureEV != 0 {
-            let exposure = CIFilter.exposureAdjust()
-            exposure.inputImage = ci
-            exposure.ev = exposureEV
-            ci = exposure.outputImage ?? ci
+        // 1. Tonal recovery — pull up shadows / roll off highlights.
+        if adjustments.shadows != 0 || adjustments.highlights != 1 {
+            let hs = CIFilter.highlightShadowAdjust()
+            hs.inputImage = ci
+            hs.shadowAmount = adjustments.shadows
+            hs.highlightAmount = adjustments.highlights
+            ci = hs.outputImage ?? ci
         }
 
-        if brightness != 0 || contrast != 1 {
+        // 2. Color — brightness / contrast / saturation.
+        if adjustments.brightness != 0 || adjustments.contrast != 1 || adjustments.saturation != 1 {
             let colorControls = CIFilter.colorControls()
             colorControls.inputImage = ci
-            colorControls.brightness = brightness
-            colorControls.contrast = contrast
-            colorControls.saturation = 1
+            colorControls.brightness = adjustments.brightness
+            colorControls.contrast = adjustments.contrast
+            colorControls.saturation = adjustments.saturation
             ci = colorControls.outputImage ?? ci
         }
 
-        guard let out = ciContext.createCGImage(ci, from: CIImage(cgImage: cgImage).extent) else {
-            return image
+        // 3. Sharpen last. Radius scales with image size so the ≤1600px preview and the full-res
+        // final render sharpen by the same *visual* amount.
+        if adjustments.sharpness != 0 {
+            let unsharp = CIFilter.unsharpMask()
+            unsharp.inputImage = ci
+            unsharp.intensity = adjustments.sharpness
+            unsharp.radius = Float(2.5 * max(extent.width, extent.height) / 1600)
+            ci = unsharp.outputImage ?? ci
         }
+
+        // Crop back to the original extent — CIUnsharpMask / CIHighlightShadowAdjust expand it, and
+        // packing depends on exact pixel dimensions.
+        guard let out = ciContext.createCGImage(ci, from: extent) else { return image }
         return UIImage(cgImage: out, scale: image.scale, orientation: image.imageOrientation)
     }
 
@@ -354,7 +379,7 @@ extension UIImage {
 
     /// Downscale so the longest edge is at most `maxDimension` *pixels*, preserving aspect ratio
     /// (returns self if already within bounds). Used to build a lightweight canvas-preview copy so
-    /// live exposure/brightness/contrast adjustments run Core Image over a small image instead of a
+    /// live image adjustments run Core Image over a small image instead of a
     /// full-resolution photo — a 12–48MP photo produces a 48–190MB bitmap per render, and dragging
     /// a slider spawns many of those, which exhausts memory and gets the app killed.
     func downscaled(maxDimension: CGFloat) -> UIImage {

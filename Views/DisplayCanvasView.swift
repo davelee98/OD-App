@@ -7,7 +7,7 @@ import CoreImage.CIFilterBuiltins
 /// user frames the shot the way it'll appear on the panel instead of stretching/padding it.
 /// Draw / text / QR annotation overlays sit on top of the cropped photo and composite into it.
 struct DisplayCanvasView: View {
-    /// Exposure-adjusted photo to display (already run through `ImageProcessor.adjust`).
+    /// Adjusted photo to display (already run through `ImageProcessor.adjust`).
     let image: UIImage?
     /// Native pixel dimensions of the connected panel (drives the box aspect ratio).
     let displaySize: CGSize

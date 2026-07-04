@@ -13,8 +13,9 @@ private let composerCanvasQueue = DispatchQueue(label: "org.opendisplay.composer
 private let canvasPreviewMaxDimension: CGFloat = 1600
 
 /// Compose a photo for one saved e-paper display and send it. Wraps `DisplayCanvasView` (crop /
-/// zoom + annotations) and adds e-ink photo adjustments (exposure / contrast), a dithered
-/// Preview, and smart defaults so a non-technical user rarely touches the Advanced controls.
+/// zoom + annotations) and adds e-ink photo adjustments (brightness / contrast / shadows /
+/// highlights / sharpness / saturation), a dithered Preview, and smart defaults so a non-technical
+/// user rarely touches the Advanced controls.
 struct ComposerView: View {
     let entity: SavedDisplayEntity
     @EnvironmentObject private var ble: BLEManager
@@ -48,9 +49,7 @@ struct ComposerView: View {
     @State private var qrColorIndex = 0
 
     // Adjustments (neutral defaults = pass-through).
-    @State private var exposureEV: Float = 0
-    @State private var brightness: Float = 0
-    @State private var contrast: Float = 1
+    @State private var adjustments = ImageAdjustments()
 
     // Dithering (smart default, overridable in Advanced).
     @State private var colorScheme: UInt8 = 0
@@ -109,9 +108,7 @@ struct ComposerView: View {
         }
         .onDisappear { connectionTimeoutTask?.cancel() }
         .onChange(of: photoItem) { _, item in loadPhoto(item) }
-        .onChange(of: exposureEV) { _, _ in refreshCanvasImage() }
-        .onChange(of: brightness) { _, _ in refreshCanvasImage() }
-        .onChange(of: contrast) { _, _ in refreshCanvasImage() }
+        .onChange(of: adjustments) { _, _ in refreshCanvasImage() }
         .onChange(of: ble.connectedDevice?.deviceID) { _, deviceID in
             ble.trace("Composer connectedDevice changed; target=\(entity.id), current=\(deviceID ?? "nil"), waiting=\(isWaitingForConnection)")
             if let identifier = targetIdentifier,
@@ -289,20 +286,31 @@ struct ComposerView: View {
         .padding()
     }
 
+    /// Grayscale schemes (0 = B/W, 5 = 4-gray, 6 = 16-gray) have no color to saturate.
+    private var schemeHasColor: Bool {
+        colorScheme != 0 && colorScheme != 5 && colorScheme != 6
+    }
+
     private var adjustmentsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Adjustments", systemImage: "slider.horizontal.3").font(.subheadline).bold()
-            adjustmentSlider(icon: "sun.max", title: "Exposure",
-                             value: $exposureEV, range: -2...2, neutral: 0)
             adjustmentSlider(icon: "circle.lefthalf.filled", title: "Brightness",
-                             value: $brightness, range: -0.4...0.4, neutral: 0)
+                             value: $adjustments.brightness, range: -0.4...0.4, neutral: 0)
             adjustmentSlider(icon: "circle.righthalf.filled", title: "Contrast",
-                             value: $contrast, range: 0.5...1.5, neutral: 1)
-            if exposureEV != 0 || brightness != 0 || contrast != 1 {
-                Button("Reset adjustments") {
-                    exposureEV = 0; brightness = 0; contrast = 1
-                }
-                .font(.caption)
+                             value: $adjustments.contrast, range: 0.5...1.5, neutral: 1)
+            adjustmentSlider(icon: "moon.stars", title: "Shadows",
+                             value: $adjustments.shadows, range: -1...1, neutral: 0)
+            adjustmentSlider(icon: "sun.max", title: "Highlights",
+                             value: $adjustments.highlights, range: 0.3...1, neutral: 1)
+            adjustmentSlider(icon: "wand.and.rays", title: "Sharpness",
+                             value: $adjustments.sharpness, range: 0...2, neutral: 0)
+            if schemeHasColor {
+                adjustmentSlider(icon: "drop.halffull", title: "Saturation",
+                                 value: $adjustments.saturation, range: 0...2, neutral: 1)
+            }
+            if !adjustments.isNeutral {
+                Button("Reset adjustments") { adjustments = .neutral }
+                    .font(.caption)
             }
         }
     }
@@ -552,9 +560,9 @@ struct ComposerView: View {
         guard let preview = previewBase else { canvasImage = nil; return }
         canvasRenderToken &+= 1
         let token = canvasRenderToken
-        let ev = exposureEV, b = brightness, c = contrast
+        let a = adjustments
         composerCanvasQueue.async {
-            let adjusted = ImageProcessor.adjust(preview, exposureEV: ev, brightness: b, contrast: c)
+            let adjusted = ImageProcessor.adjust(preview, adjustments: a)
             DispatchQueue.main.async {
                 guard token == self.canvasRenderToken else { return }   // a newer adjustment won
                 self.canvasImage = adjusted
@@ -585,7 +593,7 @@ struct ComposerView: View {
         qrColorIndex = 0
 
         // Adjustments.
-        exposureEV = 0; brightness = 0; contrast = 1
+        adjustments = .neutral
 
         // Dithering. Re-derive the scheme from the connected panel so Preview and Send agree;
         // clear the override first so applyScheme reapplies the smart dithering default.
@@ -644,7 +652,7 @@ struct ComposerView: View {
         }
     }
 
-    /// Render the cropped, exposure-adjusted photo plus annotations at the panel's native
+    /// Render the cropped, adjusted photo plus annotations at the panel's native
     /// resolution — the exact bitmap handed to `ImageProcessor.process` → JS compression → BLE upload.
     private func renderComposite() -> UIImage {
         let w = displayWidth, h = displayHeight
@@ -657,8 +665,7 @@ struct ComposerView: View {
 
             // Photo: same aspect-fill + zoom + pan transform used on screen, scaled to pixels.
             if let base = baseImage {
-                let img = ImageProcessor.adjust(base, exposureEV: exposureEV,
-                                                brightness: brightness, contrast: contrast)
+                let img = ImageProcessor.adjust(base, adjustments: adjustments)
                 let imgSize = img.size
                 if imgSize.width > 0, imgSize.height > 0 {
                     let s0 = max(box.width / imgSize.width, box.height / imgSize.height)
