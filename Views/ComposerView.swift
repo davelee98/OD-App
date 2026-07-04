@@ -14,7 +14,7 @@ private let canvasPreviewMaxDimension: CGFloat = 1600
 
 /// Compose a photo for one saved e-paper display and send it. Wraps `DisplayCanvasView` (crop /
 /// zoom + annotations) and adds e-ink photo adjustments (brightness / contrast / shadows /
-/// highlights / sharpness / saturation), a dithered Preview, and smart defaults so a non-technical
+/// highlight recovery / saturation), a dithered Preview, and smart defaults so a non-technical
 /// user rarely touches the Advanced controls.
 struct ComposerView: View {
     let entity: SavedDisplayEntity
@@ -327,6 +327,17 @@ struct ComposerView: View {
         colorScheme != 0 && colorScheme != 5 && colorScheme != 6
     }
 
+    /// Presents the stored `highlights` value (CI range `0.3...1`, `1` = neutral) as a left-anchored
+    /// 0...1 "recovery" slider: `0` (left) feeds `1.0` (no change) to `CIHighlightShadowAdjust`, and
+    /// `1` (right) feeds `0.3` (maximum highlight recovery). Keeps the underlying CI semantics intact
+    /// while placing neutral at the far left instead of the far-right edge of the raw range.
+    private var highlightRecoveryBinding: Binding<Float> {
+        Binding(
+            get: { (1 - adjustments.highlights) / 0.7 },
+            set: { adjustments.highlights = 1 - $0 * 0.7 }
+        )
+    }
+
     private var adjustmentsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Adjustments", systemImage: "slider.horizontal.3").font(.subheadline).bold()
@@ -336,10 +347,8 @@ struct ComposerView: View {
                              value: $adjustments.contrast, range: 0.5...1.5, neutral: 1)
             adjustmentSlider(icon: "moon.stars", title: "Shadows",
                              value: $adjustments.shadows, range: -1...1, neutral: 0)
-            adjustmentSlider(icon: "sun.max", title: "Highlights",
-                             value: $adjustments.highlights, range: 0.3...1, neutral: 1)
-            adjustmentSlider(icon: "wand.and.rays", title: "Sharpness",
-                             value: $adjustments.sharpness, range: 0...2, neutral: 0)
+            adjustmentSlider(icon: "sun.max", title: "Highlight Recovery",
+                             value: highlightRecoveryBinding, range: 0...1, neutral: 0)
             if schemeHasColor {
                 adjustmentSlider(icon: "drop.halffull", title: "Saturation",
                                  value: $adjustments.saturation, range: 0...2, neutral: 1)
