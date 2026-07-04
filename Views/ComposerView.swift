@@ -20,6 +20,7 @@ struct ComposerView: View {
     let entity: SavedDisplayEntity
     @EnvironmentObject private var ble: BLEManager
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     // Photo + crop transform.
     @State private var photoItem: PhotosPickerItem?
@@ -93,12 +94,14 @@ struct ComposerView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            canvas
-            modeBar
-            toolControls
-            Divider()
-            ScrollView { controlPanel }
+        Group {
+            // Compact vertical height = phone landscape (more reliable than horizontal size class,
+            // which stays .compact on most landscape phones). iPad stays regular → portrait.
+            if verticalSizeClass == .compact {
+                landscapeLayout
+            } else {
+                portraitLayout
+            }
         }
         .navigationTitle(entity.friendlyName)
         .navigationBarTitleDisplayMode(.inline)
@@ -141,6 +144,36 @@ struct ComposerView: View {
             Button("OK") { dismiss() }
         } message: {
             Text(connectionAlertMessage ?? "The display could not be reached.")
+        }
+    }
+
+    // MARK: - Layouts
+
+    /// Portrait (regular height): canvas on top, controls stacked and scrolling below.
+    private var portraitLayout: some View {
+        VStack(spacing: 0) {
+            canvas
+            modeBar
+            toolControls
+            Divider()
+            ScrollView { controlPanel }
+        }
+    }
+
+    /// Landscape (compact height): canvas on the left, a fixed-width scrolling control column right.
+    private var landscapeLayout: some View {
+        HStack(spacing: 0) {
+            canvas
+            Divider()
+            ScrollView {
+                VStack(spacing: 0) {
+                    modeBar
+                    toolControls
+                    controlPanel
+                }
+            }
+            .frame(width: 340)
+            .scrollDismissesKeyboard(.interactively)
         }
     }
 

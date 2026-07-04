@@ -12,7 +12,8 @@ struct SplashView: View {
                 .resizable()
                 .renderingMode(.original)
                 .scaledToFit()
-                .frame(width: UIScreen.main.bounds.width * 0.5)
+                .containerRelativeFrame(.horizontal) { width, _ in width * 0.5 }
+                .frame(maxWidth: 320)
 
             VStack(spacing: 10) {
                 (
