@@ -109,6 +109,9 @@ struct ComposerView: View {
         }
         .onDisappear { connectionTimeoutTask?.cancel() }
         .onChange(of: photoItem) { _, item in loadPhoto(item) }
+        .onChange(of: exposureEV) { _, _ in refreshCanvasImage() }
+        .onChange(of: brightness) { _, _ in refreshCanvasImage() }
+        .onChange(of: contrast) { _, _ in refreshCanvasImage() }
         .onChange(of: ble.connectedDevice?.deviceID) { _, deviceID in
             ble.trace("Composer connectedDevice changed; target=\(entity.id), current=\(deviceID ?? "nil"), waiting=\(isWaitingForConnection)")
             if let identifier = targetIdentifier,
@@ -584,10 +587,10 @@ struct ComposerView: View {
         // Adjustments.
         exposureEV = 0; brightness = 0; contrast = 1
 
-        // Dithering.
-        colorScheme = 0
-        dithering = .floydSteinberg
+        // Dithering. Re-derive the scheme from the connected panel so Preview and Send agree;
+        // clear the override first so applyScheme reapplies the smart dithering default.
         ditheringOverridden = false
+        applyScheme(device?.config?.colorScheme ?? UInt8(clamping: entity.colorScheme))
         showAdvanced = false
 
         // Preview.
@@ -631,7 +634,12 @@ struct ComposerView: View {
         let dith = dithering
         DispatchQueue.global(qos: .userInitiated).async {
             guard let pixels = ImageProcessor.process(image: composite, width: w, height: h,
-                                                      colorScheme: scheme, dithering: dith) else { return }
+                                                      colorScheme: scheme, dithering: dith) else {
+                DispatchQueue.main.async {
+                    device.lastError = "Could not render the image for this display's color scheme."
+                }
+                return
+            }
             DispatchQueue.main.async { device.uploadImage(pixelData: pixels, compressed: true) }
         }
     }
