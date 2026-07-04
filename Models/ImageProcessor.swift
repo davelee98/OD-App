@@ -242,8 +242,8 @@ enum ImageProcessor {
     private static func pack(_ indexed: [Int], scheme: UInt8, width: Int, height: Int) -> Data {
         switch scheme {
         case 0:        return pack1bpp(indexed, invert: false)
-        case 1:        return pack2planes(indexed, redIdx: 2, yellowIdx: nil)
-        case 2:        return pack2planes(indexed, redIdx: nil, yellowIdx: 2)
+        case 1:        return pack2planes(indexed, redIdx: 2, yellowIdx: nil, width: width, height: height)
+        case 2:        return pack2planes(indexed, redIdx: nil, yellowIdx: 2, width: width, height: height)
         case 3:        return pack2bpp(indexed)
         case 4:        return pack6color(indexed)
         case 5:        return packGray4(indexed, width: width, height: height)
@@ -262,16 +262,23 @@ enum ImageProcessor {
         return out
     }
 
-    // 2 bitplanes (B/W + colour)
-    private static func pack2planes(_ indexed: [Int], redIdx: Int?, yellowIdx: Int?) -> Data {
-        let planeSize = (indexed.count + 7) / 8
+    // 2 bitplanes (B/W + colour), row-padded so each row starts on a byte boundary
+    private static func pack2planes(_ indexed: [Int], redIdx: Int?, yellowIdx: Int?, width: Int, height: Int) -> Data {
+        let bytesPerRow = (width + 7) / 8
+        let planeSize = bytesPerRow * height
         var out = Data(count: planeSize * 2)
-        for (i, v) in indexed.enumerated() {
-            let mask = UInt8(0x80 >> (i % 8))
-            // plane1 (BW): white (v==1) or red; yellow does NOT set this plane
-            if v == 1 || (redIdx != nil && v == redIdx) { out[i / 8] |= mask }
-            // plane2 (colour): red or yellow
-            if v == redIdx || v == yellowIdx { out[planeSize + i / 8] |= mask }
+        for y in 0..<height {
+            for x in 0..<width {
+                let i = y * width + x
+                guard i < indexed.count else { continue }
+                let v = indexed[i]
+                let byteIdx = y * bytesPerRow + (x >> 3)
+                let mask = UInt8(0x80 >> (x & 7))
+                // plane1 (BW): white (v==1) or red; yellow does NOT set this plane
+                if v == 1 || (redIdx != nil && v == redIdx) { out[byteIdx] |= mask }
+                // plane2 (colour): red or yellow
+                if v == redIdx || v == yellowIdx { out[planeSize + byteIdx] |= mask }
+            }
         }
         return out
     }
