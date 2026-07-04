@@ -218,14 +218,51 @@ struct DisplayCanvasView: View {
 
 // MARK: - Shared QR helper (used by the canvas and the final composite render)
 
+/// Shared CIContext for rasterizing QR codes to CGImage-backed UIImages.
+private let odQRContext = CIContext(options: nil)
+
+/// Cache of rendered QR images. The canvas calls `odGenerateQR` on every SwiftUI render pass, and
+/// `QRItem` is a value struct in `@State` (storing a UIImage on it would break value semantics), so
+/// an NSCache — with automatic memory-pressure eviction — is the right shape. Canvas-size and
+/// composite-size (`size * k`) entries are distinct by key design.
+private let odQRCache = NSCache<NSString, UIImage>()
+
+/// Generate a QR code as a **CGImage-backed** `UIImage`. The previous `UIImage(ciImage:)` had a nil
+/// `cgImage`, which SwiftUI's `Image(uiImage:)` cannot rasterize — so the QR was invisible on the
+/// live canvas (only the UIKit `draw(in:)` composite path could render it). Rasterizing through a
+/// CIContext to a real CGImage fixes that.
 func odGenerateQR(content: String, size: CGFloat, color: Color) -> UIImage? {
+    guard size > 0 else { return nil }
+
+    // Cache key: content + rounded size + tint RGB. Tint change or size change is a distinct entry.
+    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+    UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a)
+    let roundedSize = Int(size.rounded())
+    let key = "\(content)|\(roundedSize)|\(Int(r * 255)),\(Int(g * 255)),\(Int(b * 255))" as NSString
+    if let cached = odQRCache.object(forKey: key) { return cached }
+
     let filter = CIFilter.qrCodeGenerator()
     filter.message = Data(content.utf8)
     filter.correctionLevel = "M"
-    guard size > 0, let ciImage = filter.outputImage, ciImage.extent.width > 0 else { return nil }
-    let scale = size / ciImage.extent.width
-    let scaled = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-    return UIImage(ciImage: scaled)
+    guard let base = filter.outputImage, base.extent.width > 0 else { return nil }
+
+    // Tint the dark modules with the swatch color; keep the background white so codes stay scannable
+    // over photos. (The old `color:` param was ignored — the swatch picker did nothing.)
+    let tint = CIFilter.falseColor()
+    tint.inputImage = base
+    tint.color0 = CIColor(color: UIColor(color))
+    tint.color1 = CIColor(color: .white)
+    guard let tinted = tint.outputImage else { return nil }
+
+    // Nearest-neighbour sampling before the affine upscale keeps modules crisp.
+    let scale = size / tinted.extent.width
+    let upscaled = tinted.samplingNearest()
+        .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+
+    guard let cg = odQRContext.createCGImage(upscaled, from: upscaled.extent) else { return nil }
+    let image = UIImage(cgImage: cg)
+    odQRCache.setObject(image, forKey: key)
+    return image
 }
 
 // MARK: - Supporting Types
