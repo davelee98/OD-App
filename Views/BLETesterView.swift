@@ -133,8 +133,11 @@ struct BLETesterView: View {
         }
 
         isSending = true
-        device.sendRaw(packet, label: usePresetCommand ? selectedCommand.displayName : "Raw")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { isSending = false }
+        // Track the real send outcome (the JS runtime completes on the main thread) instead of a
+        // fixed 0.3s timer, so the spinner clears on the actual ACK — and on failure too.
+        device.sendRaw(packet, label: usePresetCommand ? selectedCommand.displayName : "Raw") { _ in
+            isSending = false
+        }
     }
 }
 

@@ -163,7 +163,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - Core commands
 
-    func sendRaw(_ data: Data, label: String? = nil, completion: ((Data) -> Void)? = nil) {
+    func sendRaw(_ data: Data, label: String? = nil, completion: ((Result<Void, Error>) -> Void)? = nil) {
         // Trace the labeled send so BLE Tester entries keep their names — the runtime's `onWrite`
         // logs the raw GATT bytes with `label: nil`, so this is the only place the caller's intent
         // is preserved. (A trace, not an appendLog, to avoid double-logging the same packet.)
@@ -171,11 +171,13 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         call("sendHex", arguments: ["hex": data.hexString.replacingOccurrences(of: " ", with: "")]) { [weak self] result in
             switch result {
             case .success:
-                completion?(Data())
+                completion?(.success(()))
             case .failure(let error):
-                // Never silently drop a send failure — surface it like the other command paths do.
+                // Never silently drop a send failure — surface it like the other command paths do,
+                // and always report it back to the caller's completion.
                 self?.trace("sendRaw \(label ?? "raw") failed: \(error.localizedDescription)", level: .error)
                 self?.lastError = error.localizedDescription
+                completion?(.failure(error))
             }
         }
     }
@@ -297,7 +299,16 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// handling has no timeout, so a device that stops responding mid-write would otherwise leave
     /// this `completion` never called and no status ever reported — success or failure.
     func writeConfig(_ model: ODConfigModel, completion: ((Bool) -> Void)? = nil) {
-        let data = ODConfig.serialize(model)
+        let data: Data
+        do {
+            data = try ODConfig.serialize(model)
+        } catch {
+            // Surface the real encode/validation message instead of silently writing 0 bytes.
+            lastError = error.localizedDescription
+            trace("writeConfig serialize failed: \(error.localizedDescription)", level: .error)
+            completion?(false)
+            return
+        }
         guard !data.isEmpty else {
             lastError = "Could not build Toolbox configuration"
             completion?(false)

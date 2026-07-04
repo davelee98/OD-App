@@ -21,6 +21,8 @@ final class BLEManager: NSObject, ObservableObject {
     private var pendingReconnectID: UUID?
     /// Strong reference to a peripheral we're connecting to before an ODDevice retains it.
     private var reconnectingPeripheral: CBPeripheral?
+    /// A scan requested before Core Bluetooth reached `.poweredOn`; started once it powers on.
+    private var pendingScan = false
 
     override init() {
         super.init()
@@ -62,13 +64,21 @@ final class BLEManager: NSObject, ObservableObject {
         bluetoothState = .unknown
         pendingReconnectID = nil
         reconnectingPeripheral = nil
+        pendingScan = false
     }
 
     // MARK: - Scanning
 
     func startScan() {
         activate()
-        guard centralManager?.state == .poweredOn else { return }
+        guard centralManager?.state == .poweredOn else {
+            // Cold start: the central is still powering on. Remember the request and start once
+            // `centralManagerDidUpdateState` reports `.poweredOn` instead of silently no-oping.
+            pendingScan = true
+            trace("startScan deferred; central not powered on (state=\(centralManager?.state.rawValue ?? -1))", level: .warning)
+            return
+        }
+        pendingScan = false
         discoveredDevices.removeAll()
         isScanning = true
         // Scan without service UUID filter — some OD firmware versions don't advertise the
@@ -81,6 +91,7 @@ final class BLEManager: NSObject, ObservableObject {
     }
 
     func stopScan() {
+        pendingScan = false
         centralManager?.stopScan()
         isScanning = false
     }
@@ -187,7 +198,10 @@ extension BLEManager: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         trace("central state changed: \(central.state.rawValue)", level: .info)
         bluetoothState = central.state
-        if central.state == .poweredOn { attemptPendingReconnect() }
+        if central.state == .poweredOn {
+            attemptPendingReconnect()
+            if pendingScan { startScan() }
+        }
     }
 
     func centralManager(_ central: CBCentralManager,
@@ -285,7 +299,15 @@ extension BLEManager: CBCentralManagerDelegate {
             deviceObservation = nil
             deviceStateObservation = nil
             connectedDevice = nil
-            DispatchQueue.main.async { [weak self] in self?.deactivate() }
+            // Don't tear down Core Bluetooth if a reconnect (e.g. to a different saved display) is
+            // already pending — deactivate() would cancel it. Re-check inside the async hop because
+            // the reconnect request can land between this check and the block running.
+            if pendingReconnectID == nil {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.pendingReconnectID == nil else { return }
+                    self.deactivate()
+                }
+            }
         }
     }
 }

@@ -6,7 +6,7 @@ enum ODConfig {
         ODConfigModel(toolbox: try ToolboxPacketCodec.decode(data))
     }
 
-    static func serialize(_ model: ODConfigModel) -> Data {
-        (try? ToolboxPacketCodec.encode(model.toolbox)) ?? Data()
+    static func serialize(_ model: ODConfigModel) throws -> Data {
+        try ToolboxPacketCodec.encode(model.toolbox)
     }
 }
