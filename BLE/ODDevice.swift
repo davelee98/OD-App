@@ -39,6 +39,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     private var msdData: Data?
     private var configReadWatchdog: DispatchWorkItem?
     private var configWriteWatchdog: DispatchWorkItem?
+    private var uploadWatchdog: DispatchWorkItem?
     private var configWriteAckHandler: ((Data) -> Void)?
 
     init(peripheral: CBPeripheral, initialMSD: Data? = nil,
@@ -114,6 +115,8 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         connectionState = .disconnected
         isAuthenticated = false
         isUploading = false
+        uploadWatchdog?.cancel()
+        uploadWatchdog = nil
     }
 
     private func configureTransport() {
@@ -127,7 +130,11 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         transport.onNotification = { [weak self] data in
             guard let self else { return }
             self.appendLog(direction: .received, data: data, label: self.responseLabel(data))
-            self.trace("notification received: \(data.count)B hex=\(data.hexString)")
+            // Every image-chunk ACK triggers a notification; keep this out of the normal trace
+            // flood and only surface it under the detailed-payloads debug flag.
+            if BLELogging.detailedPayloads {
+                self.trace("notification received: \(data.count)B hex=\(data.hexString)")
+            }
             self.configWriteAckHandler?(data)
             self.runtime?.receiveNotification(data)
         }
@@ -156,8 +163,19 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     // MARK: - Core commands
 
     func sendRaw(_ data: Data, label: String? = nil, completion: ((Data) -> Void)? = nil) {
-        call("sendHex", arguments: ["hex": data.hexString.replacingOccurrences(of: " ", with: "")]) { result in
-            if case .success = result { completion?(Data()) }
+        // Trace the labeled send so BLE Tester entries keep their names — the runtime's `onWrite`
+        // logs the raw GATT bytes with `label: nil`, so this is the only place the caller's intent
+        // is preserved. (A trace, not an appendLog, to avoid double-logging the same packet.)
+        trace("sendRaw \(label ?? "raw"): \(data.count)B")
+        call("sendHex", arguments: ["hex": data.hexString.replacingOccurrences(of: " ", with: "")]) { [weak self] result in
+            switch result {
+            case .success:
+                completion?(Data())
+            case .failure(let error):
+                // Never silently drop a send failure — surface it like the other command paths do.
+                self?.trace("sendRaw \(label ?? "raw") failed: \(error.localizedDescription)")
+                self?.lastError = error.localizedDescription
+            }
         }
     }
 
@@ -432,13 +450,38 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             "transmissionModes": Int(modes),
             "useFastRefresh": false
         ]
+        armUploadWatchdog()
         call("uploadPacked", arguments: arguments) { [weak self] result in
-            self?.isUploading = false
+            guard let self else { return }
+            self.uploadWatchdog?.cancel()
+            self.uploadWatchdog = nil
+            self.isUploading = false
             switch result {
-            case .success: self?.uploadProgress = 1
-            case .failure(let error): self?.lastError = error.localizedDescription
+            case .success: self.uploadProgress = 1
+            case .failure(let error): self.lastError = error.localizedDescription
             }
         }
+    }
+
+    /// `ble-common.js` streams an image over many chunks with no overall timeout, so a device that
+    /// stops responding mid-upload would leave `isUploading` stuck and the progress bar frozen.
+    /// Uploads are long-running (hundreds of chunks), so this uses a generous 30s window instead of
+    /// the 10s used for config exchanges. The watchdog is re-armed on every `uploadProgress` event
+    /// (see `handleRuntimeEvent`) so a slow-but-advancing upload isn't killed; it only fires after
+    /// 30s of no forward progress.
+    private func armUploadWatchdog() {
+        uploadWatchdog?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.trace("uploadImage STALL WATCHDOG: no progress 30s; " +
+                       "progress=\(self.uploadProgress), appState=\(self.connectionState), " +
+                       "peripheralState=\(self.peripheral.state.rawValue)")
+            self.lastError = "Image upload timed out. The device stopped responding."
+            self.isUploading = false
+            self.uploadProgress = 0
+        }
+        uploadWatchdog = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: work)
     }
 
     // MARK: - Runtime results
@@ -470,6 +513,8 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             let progress = (payload["progress"] as? NSNumber)?.doubleValue ?? 0
             let total = max(1, (payload["total"] as? NSNumber)?.doubleValue ?? 1)
             uploadProgress = min(1, progress / total)
+            // Forward progress resets the stall window so a slow-but-advancing upload isn't killed.
+            if isUploading { armUploadWatchdog() }
         case "configProgress":
             let received = (payload["received"] as? NSNumber)?.doubleValue ?? 0
             let total = max(1, (payload["total"] as? NSNumber)?.doubleValue ?? 1)

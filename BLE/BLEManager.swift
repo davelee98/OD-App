@@ -88,6 +88,20 @@ final class BLEManager: NSObject, ObservableObject {
         log.removeAll()
     }
 
+    /// Cap on retained log entries. The UI only shows the tail, so an unbounded array just leaks
+    /// memory during long sessions (image uploads alone add hundreds of entries). Mirrors the
+    /// trimming ToolboxView.statusLog uses.
+    private static let maxLogEntries = 500
+
+    /// Centralized, bounded append for the shared traffic log — trims the oldest entries when the
+    /// cap is exceeded so appends never grow without limit.
+    func appendLog(_ entry: LogEntry) {
+        log.append(entry)
+        if log.count > Self.maxLogEntries {
+            log.removeFirst(log.count - Self.maxLogEntries)
+        }
+    }
+
     // MARK: - Connection
 
     func connect(_ discovered: DiscoveredDevice) {
@@ -217,7 +231,7 @@ extension BLEManager: CBCentralManagerDelegate {
             device = ODDevice(
                 peripheral: peripheral,
                 initialMSD: advertisedMSD,
-                logHandler: { [weak self] entry in self?.log.append(entry) }
+                logHandler: { [weak self] entry in self?.appendLog(entry) }
             )
             deviceMap[peripheral.identifier] = device
         }
@@ -280,9 +294,9 @@ extension BLEManager {
         let entry = LogEntry(direction: .system, data: Data(), label: message)
         print("[BLETrace] \(message)")
         if Thread.isMainThread {
-            log.append(entry)
+            appendLog(entry)
         } else {
-            DispatchQueue.main.async { [weak self] in self?.log.append(entry) }
+            DispatchQueue.main.async { [weak self] in self?.appendLog(entry) }
         }
     }
 }
