@@ -621,7 +621,11 @@ struct ToolboxView: View {
     }
 
     private func randomKey() -> String {
-        ODAuth.randomPSK().map { String(format: "%02x", $0) }.joined()
+        guard let psk = ODAuth.randomPSK() else {
+            addLog("Could not generate a secure encryption key.", type: .error)
+            return ""
+        }
+        return psk.map { String(format: "%02x", $0) }.joined()
     }
 
     private func addLog(_ message: String, type: StatusEntry.EntryType) {
