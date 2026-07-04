@@ -35,6 +35,13 @@ struct ToolboxView: View {
     @State private var statusLog: [StatusEntry] = []
     @State private var suppressAdvancedModeOnConfigChange = false
 
+    // Cached JavaScriptCore-derived outputs. Recomputed only when `configuration` or the active
+    // schema changes (see `recomputeDerivedConfiguration`), rather than on every body evaluation —
+    // ToolboxView re-renders on every BLE notification, and each encode/validate is a synchronous
+    // main-thread JS round-trip.
+    @State private var encodedConfiguration: Data?
+    @State private var configurationValidation: ToolboxValidation?
+
     enum Mode: String, CaseIterable, Identifiable {
         case simple = "Simple Setup"
         case advanced = "Advanced Mode"
@@ -71,7 +78,12 @@ struct ToolboxView: View {
         }
         .navigationTitle("OpenDisplay Device Configuration")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear(perform: loadDeviceConfiguration)
+        .onAppear {
+            loadDeviceConfiguration()
+            recomputeDerivedConfiguration()
+        }
+        .onChange(of: configuration) { _, _ in recomputeDerivedConfiguration() }
+        .onChange(of: schemaText) { _, _ in recomputeDerivedConfiguration() }
         // `.onReceive` with a publisher built fresh on every `body` evaluation (the old
         // `deviceConfigPublisher`/`deviceErrorPublisher` computed properties) resubscribes each
         // render, and `@Published` always replays its *current* value to a new subscriber. That
@@ -463,6 +475,9 @@ struct ToolboxView: View {
                         Button("Apply") {
                             do {
                                 schema = try ToolboxResources.decodeSchema(schemaText)
+                                // Apply updates the runtime's active schema but not `schemaText`
+                                // (it is the input), so re-encode explicitly here.
+                                recomputeDerivedConfiguration()
                                 addLog("Custom schema applied", type: .success)
                                 showSchemaEditor = false
                             } catch { addLog(error.localizedDescription, type: .error) }
@@ -659,10 +674,12 @@ struct ToolboxView: View {
         }
     }
 
-    private var encodedConfiguration: Data? { try? ToolboxPacketCodec.encode(configuration, schema: schema) }
-
-    private var configurationValidation: ToolboxValidation? {
-        try? ToolboxConfigRuntime.shared.validate(configuration)
+    /// Refreshes the cached `encodedConfiguration`/`configurationValidation` by running the two
+    /// JavaScriptCore round-trips once. Called from `.onAppear`, `.onChange(of: configuration)`,
+    /// `.onChange(of: schemaText)`, and after a schema Apply — never from `body`.
+    private func recomputeDerivedConfiguration() {
+        encodedConfiguration = try? ToolboxPacketCodec.encode(configuration, schema: schema)
+        configurationValidation = try? ToolboxConfigRuntime.shared.validate(configuration)
     }
 
     private var shareURL: URL? {
