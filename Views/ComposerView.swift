@@ -36,6 +36,7 @@ struct ComposerView: View {
     @State private var textItems: [TextItem] = []
     @State private var qrItems: [QRItem] = []
     @State private var canvasSize: CGSize = .zero
+    @State private var selection: SelectedElement?
 
     // Annotation tool settings.
     @State private var drawColorIndex = 0
@@ -109,6 +110,7 @@ struct ComposerView: View {
         .onDisappear { connectionTimeoutTask?.cancel() }
         .onChange(of: photoItem) { _, item in loadPhoto(item) }
         .onChange(of: adjustments) { _, _ in refreshCanvasImage() }
+        .onChange(of: mode) { _, newMode in if newMode == .draw { selection = nil } }
         .onChange(of: ble.connectedDevice?.deviceID) { _, deviceID in
             ble.trace("Composer connectedDevice changed; target=\(entity.id), current=\(deviceID ?? "nil"), waiting=\(isWaitingForConnection)")
             if let identifier = targetIdentifier,
@@ -153,6 +155,7 @@ struct ComposerView: View {
             pan: $pan, scale: $scale,
             strokes: $strokes, textItems: $textItems, qrItems: $qrItems,
             canvasSize: $canvasSize,
+            selection: $selection,
             drawColorIndex: drawColorIndex, drawLineWidth: drawLineWidth,
             pendingText: pendingText, pendingTextSize: pendingTextSize, textColorIndex: textColorIndex,
             pendingQRContent: pendingQRContent, pendingQRSize: pendingQRSize, qrColorIndex: qrColorIndex,
@@ -580,6 +583,7 @@ struct ComposerView: View {
         // Annotations.
         mode = .move
         strokes.removeAll(); textItems.removeAll(); qrItems.removeAll()
+        selection = nil
 
         // Annotation tool settings.
         drawColorIndex = 0
@@ -610,6 +614,7 @@ struct ComposerView: View {
         if !strokes.isEmpty { strokes.removeLast() }
         else if !textItems.isEmpty { textItems.removeLast() }
         else if !qrItems.isEmpty { qrItems.removeLast() }
+        selection = nil
     }
 
     private func generatePreview() {
