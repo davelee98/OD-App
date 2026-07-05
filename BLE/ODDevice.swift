@@ -51,7 +51,15 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     private var configReadWatchdog: DispatchWorkItem?
     private var configWriteWatchdog: DispatchWorkItem?
     private var uploadWatchdog: DispatchWorkItem?
+    private var firmwareWatchdog: DispatchWorkItem?
+    private var msdWatchdog: DispatchWorkItem?
+    private var authWatchdog: DispatchWorkItem?
     private var configWriteAckHandler: ((Data) -> Void)?
+    // The ack handler and watchdogs above are single shared slots: two overlapping config
+    // operations would clobber each other's, leaving the loser to complete only via timeout.
+    // These flags reject the overlapping caller outright instead.
+    private var isConfigReadInFlight = false
+    private var isConfigWriteInFlight = false
 
     init(peripheral: CBPeripheral, initialMSD: Data? = nil,
          logHandler: @escaping (LogEntry) -> Void) {
@@ -126,8 +134,19 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         connectionState = .disconnected
         isAuthenticated = false
         if uploadPhase == .sending { failUpload("The display disconnected during upload.") }
-        uploadWatchdog?.cancel()
-        uploadWatchdog = nil
+        // A disconnect orphans every in-flight operation: cancel all stall watchdogs so none
+        // fires seconds later over stale state, drop the chunk-ack handler, and clear the
+        // in-flight flags so the next connection starts fresh. (`setConnected(false)` above
+        // lets the JS runtime reject its pending calls through the normal completions.)
+        uploadWatchdog?.cancel();      uploadWatchdog = nil
+        configReadWatchdog?.cancel();  configReadWatchdog = nil
+        configWriteWatchdog?.cancel(); configWriteWatchdog = nil
+        firmwareWatchdog?.cancel();    firmwareWatchdog = nil
+        msdWatchdog?.cancel();         msdWatchdog = nil
+        authWatchdog?.cancel();        authWatchdog = nil
+        configWriteAckHandler = nil
+        isConfigReadInFlight = false
+        isConfigWriteInFlight = false
     }
 
     private func configureTransport() {
@@ -192,11 +211,39 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
+    /// Shared scaffolding for the per-operation stall watchdogs. `ble-common.js` has no timeout
+    /// on any notification-driven exchange, so every native operation that waits on the device
+    /// arms one of these; without it, a device that goes quiet leaves the operation hanging
+    /// forever with no error. Runs on the main queue like all other BLE work.
+    private func makeWatchdog(operation: String, timeout: TimeInterval = 10,
+                              onTimeout: @escaping () -> Void) -> DispatchWorkItem {
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.trace("\(operation) STALL WATCHDOG: no response \(Int(timeout))s after request; " +
+                       "appState=\(self.connectionState), peripheralState=\(self.peripheral.state.rawValue)",
+                       level: .error)
+            onTimeout()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: work)
+        return work
+    }
+
     func readFirmware() {
         trace("readFirmware dispatching to runtime.call")
+        var didComplete = false
+        firmwareWatchdog?.cancel()
+        firmwareWatchdog = makeWatchdog(operation: "readFirmware") { [weak self] in
+            guard !didComplete else { return }
+            didComplete = true
+            self?.lastError = "Reading the firmware version timed out. The device did not respond."
+        }
         call("readFirmware") { [weak self] result in
             guard let self else { return }
             self.trace("readFirmware runtime.call completion invoked")
+            self.firmwareWatchdog?.cancel()
+            self.firmwareWatchdog = nil
+            guard !didComplete else { return }
+            didComplete = true
             switch result {
             case .success(let value):
                 let major = (value["major"] as? NSNumber)?.intValue ?? 0
@@ -211,8 +258,21 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     func readMSD() {
         isReadingAdvertisement = true
         advertisementError = nil
+        var didComplete = false
+        msdWatchdog?.cancel()
+        msdWatchdog = makeWatchdog(operation: "readMSD") { [weak self] in
+            guard !didComplete else { return }
+            didComplete = true
+            // Un-sticks the advertisement spinner, which otherwise waits on this forever.
+            self?.advertisementError = "Reading advertising data timed out. The device did not respond."
+            self?.isReadingAdvertisement = false
+        }
         call("readMsd") { [weak self] result in
             guard let self else { return }
+            self.msdWatchdog?.cancel()
+            self.msdWatchdog = nil
+            guard !didComplete else { return }
+            didComplete = true
             switch result {
             case .success(let value):
                 guard let hex = value["hex"] as? String, let data = Data(hexString: hex) else {
@@ -238,11 +298,18 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     ///   an observer watching those `@Published` properties for a *change*).
     func readConfig(completion: ((Result<ODConfigModel, Error>) -> Void)? = nil) {
         trace("readConfig requested; appState=\(connectionState), peripheralState=\(peripheral.state.rawValue)")
+        guard !isConfigReadInFlight else {
+            trace("readConfig rejected: a configuration read is already in progress", level: .warning)
+            completion?(.failure(ODDeviceError("A configuration read is already in progress")))
+            return
+        }
+        isConfigReadInFlight = true
         configReadProgress = 0
         var didComplete = false
-        let finish: (Result<ODConfigModel, Error>) -> Void = { result in
+        let finish: (Result<ODConfigModel, Error>) -> Void = { [weak self] result in
             guard !didComplete else { return }
             didComplete = true
+            self?.isConfigReadInFlight = false
             completion?(result)
         }
         armConfigReadWatchdog {
@@ -292,23 +359,24 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// visible, logged failure instead of an indefinite stall.
     private func armConfigReadWatchdog(onTimeout: @escaping () -> Void) {
         configReadWatchdog?.cancel()
-        let work = DispatchWorkItem { [weak self] in
+        configReadWatchdog = makeWatchdog(operation: "readConfig") { [weak self] in
             guard let self else { return }
-            self.trace("readConfig STALL WATCHDOG: no response 10s after request; " +
-                       "progress=\(self.configReadProgress), appState=\(self.connectionState), " +
-                       "peripheralState=\(self.peripheral.state.rawValue)", level: .error)
             self.lastError = "Reading configuration timed out. The device stopped responding."
             self.configReadProgress = 0
             onTimeout()
         }
-        configReadWatchdog = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: work)
     }
 
     /// Same rationale as `readConfig`'s watchdog+completion: `ble-common.js`'s chunked write ACK
     /// handling has no timeout, so a device that stops responding mid-write would otherwise leave
     /// this `completion` never called and no status ever reported — success or failure.
     func writeConfig(_ model: ODConfigModel, completion: ((Bool) -> Void)? = nil) {
+        guard !isConfigWriteInFlight else {
+            trace("writeConfig rejected: a configuration write is already in progress", level: .warning)
+            lastError = "A configuration write is already in progress"
+            completion?(false)
+            return
+        }
         let data: Data
         do {
             data = try ODConfig.serialize(model)
@@ -325,6 +393,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
         trace("writeConfig requested; \(data.count) bytes; appState=\(connectionState), peripheralState=\(peripheral.state.rawValue)")
+        isConfigWriteInFlight = true
         var didComplete = false
         let finish: (Bool) -> Void = { [weak self] succeeded in
             guard !didComplete else { return }
@@ -332,6 +401,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             self?.configWriteWatchdog?.cancel()
             self?.configWriteWatchdog = nil
             self?.configWriteAckHandler = nil
+            self?.isConfigWriteInFlight = false
             completion?(succeeded)
         }
 
@@ -340,7 +410,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // It only echoes each chunk's own command byte (0x00 0x41 for the first/only chunk,
         // 0x00 0x42 for subsequent ones), so that JS promise never resolves on its own. Detect
         // that ack pattern natively instead, using the same 200-byte chunking ble-common.js uses.
-        let chunkSize = 200
+        let chunkSize = OD.configWriteChunkSize
         let expectedChunks = max(1, Int((Double(data.count) / Double(chunkSize)).rounded(.up)))
         var chunksAcked = 0
         configWriteAckHandler = { [weak self] notification in
@@ -385,15 +455,11 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     private func armConfigWriteWatchdog(onTimeout: @escaping () -> Void) {
         configWriteWatchdog?.cancel()
-        let work = DispatchWorkItem { [weak self] in
+        configWriteWatchdog = makeWatchdog(operation: "writeConfig") { [weak self] in
             guard let self else { return }
-            self.trace("writeConfig STALL WATCHDOG: no response 10s after request; " +
-                       "appState=\(self.connectionState), peripheralState=\(self.peripheral.state.rawValue)", level: .error)
             self.lastError = "Writing configuration timed out. The device stopped responding."
             onTimeout()
         }
-        configWriteWatchdog = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: work)
     }
 
     func reboot() { callIgnoringResult("reboot") }
@@ -407,8 +473,20 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             lastError = "Authentication key must contain exactly 16 bytes"
             return
         }
+        var didComplete = false
+        authWatchdog?.cancel()
+        authWatchdog = makeWatchdog(operation: "authenticate") { [weak self] in
+            guard !didComplete else { return }
+            didComplete = true
+            self?.isAuthenticated = false
+            self?.lastError = "Authentication timed out. The device did not respond."
+        }
         call("authenticate", arguments: ["keyHex": psk.hexString.replacingOccurrences(of: " ", with: "")]) {
             [weak self] result in
+            self?.authWatchdog?.cancel()
+            self?.authWatchdog = nil
+            guard !didComplete else { return }
+            didComplete = true
             switch result {
             case .success: self?.isAuthenticated = true
             case .failure(let error):
