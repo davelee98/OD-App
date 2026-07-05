@@ -511,23 +511,29 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     /// `ble-common.js` streams an image over many chunks with no overall timeout, so a device that
-    /// stops responding mid-upload would leave `isUploading` stuck and the progress bar frozen.
-    /// Uploads are long-running (hundreds of chunks), so this uses a generous 30s window instead of
-    /// the 10s used for config exchanges. The watchdog is re-armed on every `uploadProgress` event
-    /// (see `handleRuntimeEvent`) so a slow-but-advancing upload isn't killed; it only fires after
-    /// 30s of no forward progress.
+    /// stops responding mid-upload would leave the send stuck and the progress bar frozen.
+    /// The watchdog is re-armed on every `uploadProgress`/`uploadStatus` event (see
+    /// `handleRuntimeEvent`) so a slow-but-advancing upload isn't killed; it only fires after a
+    /// window with no forward progress. Chunk transfer uses 30s. Once every chunk is sent
+    /// (`uploadProgress >= 1`) the panel refreshes its e-paper — a phase that legitimately
+    /// produces **no BLE traffic** and, on color panels, routinely exceeds 30s — so the window
+    /// stretches to 120s to avoid reporting a timeout on an upload that is about to succeed.
     private func armUploadWatchdog() {
         uploadWatchdog?.cancel()
+        let refreshing = uploadProgress >= 1
+        let window: TimeInterval = refreshing ? 120 : 30
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.trace("uploadImage STALL WATCHDOG: no progress 30s; " +
+            self.trace("uploadImage STALL WATCHDOG: no progress \(Int(window))s; " +
                        "progress=\(self.uploadProgress), appState=\(self.connectionState), " +
                        "peripheralState=\(self.peripheral.state.rawValue)", level: .error)
             self.uploadProgress = 0
-            self.failUpload("Image upload timed out. The display stopped responding.")
+            self.failUpload(refreshing
+                ? "The display did not confirm its refresh in time. It may still be updating."
+                : "Image upload timed out. The display stopped responding.")
         }
         uploadWatchdog = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + window, execute: work)
     }
 
     // MARK: - Runtime results
@@ -559,6 +565,9 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if let message = payload["message"] as? String { ODLog.proto.debug("\(message, privacy: .public)") }
         case "uploadStatus":
             uploadStatus = payload["message"] as? String
+            // Status messages are forward progress too — notably "Upload complete…, refreshing
+            // display…", which arrives right as the silent e-paper refresh phase begins.
+            if uploadPhase == .sending { armUploadWatchdog() }
         case "uploadProgress":
             let progress = (payload["progress"] as? NSNumber)?.doubleValue ?? 0
             let total = max(1, (payload["total"] as? NSNumber)?.doubleValue ?? 1)

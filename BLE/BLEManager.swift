@@ -11,9 +11,12 @@ final class BLEManager: NSObject, ObservableObject {
     @Published private(set) var connectionError: String?
     /// Shared traffic history for the BLE session; it is not owned by any one device.
     @Published private(set) var log: [LogEntry] = []
-    var namePrefixes = [OD.namePrefix]
+    var namePrefixes = OD.namePrefixes
 
     private var centralManager: CBCentralManager?
+    /// Peripherals already logged as unmatched this scan — keeps the reject log to one line per
+    /// device per scan instead of spamming on every advertisement.
+    private var loggedUnmatched: Set<UUID> = []
     private var deviceMap: [UUID: ODDevice] = [:]
     private var deviceObservation: AnyCancellable?
     private var deviceStateObservation: AnyCancellable?
@@ -60,6 +63,7 @@ final class BLEManager: NSObject, ObservableObject {
         // ODDevice after recreating the central leaves its transport attached to a stale peripheral.
         deviceMap.removeAll()
         discoveredDevices.removeAll()
+        loggedUnmatched.removeAll()
         isScanning = false
         bluetoothState = .unknown
         pendingReconnectID = nil
@@ -80,6 +84,7 @@ final class BLEManager: NSObject, ObservableObject {
         }
         pendingScan = false
         discoveredDevices.removeAll()
+        loggedUnmatched.removeAll()
         isScanning = true
         // Scan without service UUID filter — some OD firmware versions don't advertise the
         // service UUID in the advertisement packet, so hardware filtering would miss them.
@@ -201,6 +206,12 @@ extension BLEManager: CBCentralManagerDelegate {
         if central.state == .poweredOn {
             attemptPendingReconnect()
             if pendingScan { startScan() }
+        } else if isScanning {
+            // Bluetooth turned off / reset mid-scan: remember and auto-resume on power-on,
+            // independent of which view happens to be visible. Never starts a scan the app
+            // hadn't already asked for.
+            pendingScan = true
+            isScanning = false
         }
     }
 
@@ -214,16 +225,35 @@ extension BLEManager: CBCentralManagerDelegate {
             connect(peripheral: peripheral)
             return
         }
-        guard let name = peripheral.name,
-              namePrefixes.contains(where: { !$0.isEmpty && name.hasPrefix($0) }) else { return }
+        let localName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
         let msd = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
-        ODLog.ble.debug("discovered \(name, privacy: .public) rssi=\(RSSI.intValue) msd=\(msd?.hexString ?? "nil", privacy: .public)")
-        let device = DiscoveredDevice(peripheral: peripheral, rssi: RSSI.intValue, msd: msd)
-        if let idx = discoveredDevices.firstIndex(where: { $0.id == device.id }) {
+        var serviceUUIDs = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? []
+        serviceUUIDs += advertisementData[CBAdvertisementDataOverflowServiceUUIDsKey] as? [CBUUID] ?? []
+
+        let matched = ODDeviceAdmission.isLikelyOpenDisplay(
+            gapName: peripheral.name, localName: localName,
+            serviceUUIDs: serviceUUIDs, msd: msd, prefixes: namePrefixes)
+
+        if !matched, loggedUnmatched.insert(peripheral.identifier).inserted {
+            ODLog.ble.debug("unmatched \(peripheral.identifier.uuidString, privacy: .public) name=\(peripheral.name ?? "nil", privacy: .public) local=\(localName ?? "nil", privacy: .public) services=\(serviceUUIDs.map(\.uuidString).joined(separator: ","), privacy: .public) msd=\(msd?.count ?? 0)B rssi=\(RSSI.intValue)")
+        }
+
+        // Store every peripheral; views filter on `isLikelyOpenDisplay`, so the "Show all
+        // devices" toggle works without a rescan.
+        if let idx = discoveredDevices.firstIndex(where: { $0.id == peripheral.identifier }) {
             discoveredDevices[idx].rssi = RSSI.intValue
-            discoveredDevices[idx].msd = msd
+            // A scan-response without MSD/local name must not wipe values a previous packet carried.
+            if msd != nil { discoveredDevices[idx].msd = msd }
+            if localName != nil { discoveredDevices[idx].localName = localName }
+            // OR, never demote: a later packet lacking service UUIDs must not un-match the device.
+            discoveredDevices[idx].isLikelyOpenDisplay = discoveredDevices[idx].isLikelyOpenDisplay || matched
         } else {
-            discoveredDevices.append(device)
+            if matched {
+                ODLog.ble.debug("discovered \(peripheral.name ?? localName ?? "unnamed", privacy: .public) rssi=\(RSSI.intValue) msd=\(msd?.hexString ?? "nil", privacy: .public)")
+            }
+            discoveredDevices.append(DiscoveredDevice(
+                peripheral: peripheral, rssi: RSSI.intValue, msd: msd,
+                localName: localName, isLikelyOpenDisplay: matched))
         }
     }
 
@@ -326,14 +356,54 @@ extension BLEManager {
 
 // MARK: - DiscoveredDevice
 
+/// Decides whether a discovered peripheral looks like an OpenDisplay device. Pure — no
+/// CBPeripheral involved — so it's unit-testable. A device is admitted if ANY signal matches:
+/// name prefix (GAP or advertised local name, case-insensitive), the OpenDisplay service UUID in
+/// the advertisement, or a manufacturer-data payload shaped like the OD advertisement. The
+/// "Show all devices" toggle is the recall safety net, so this favors precision.
+enum ODDeviceAdmission {
+    /// Company ID 0x004C (Apple) floods every scan with 16-byte-ish Continuity traffic and is
+    /// never an OD device.
+    private static let excludedCompanyIDs: Set<UInt16> = [0x004C]
+
+    static func isLikelyOpenDisplay(
+        gapName: String?,
+        localName: String?,
+        serviceUUIDs: [CBUUID],
+        msd: Data?,
+        prefixes: [String] = OD.namePrefixes
+    ) -> Bool {
+        // (a) name prefix — cached GAP name OR the advertisement's local name.
+        for candidate in [gapName, localName].compactMap({ $0 }) {
+            if prefixes.contains(where: { !$0.isEmpty &&
+                candidate.range(of: $0, options: [.anchored, .caseInsensitive]) != nil }) {
+                return true
+            }
+        }
+        // (b) advertises the OpenDisplay service (0x2446).
+        if serviceUUIDs.contains(OD.serviceUUID) { return true }
+        // (c) manufacturer data shaped like the OD payload: exactly 16 bytes (the firmware's
+        //     fixed layout — `>=` would admit most Apple/vendor traffic), excluding known-noisy
+        //     company IDs. The company ID is otherwise unvalidated, matching
+        //     ODAdvertisementData.parse which accepts any.
+        if let msd, msd.count == 16 {
+            let companyID = UInt16(msd[msd.startIndex]) | (UInt16(msd[msd.startIndex + 1]) << 8)
+            if !excludedCompanyIDs.contains(companyID) { return true }
+        }
+        return false
+    }
+}
+
 struct DiscoveredDevice: Identifiable {
     var id: UUID { peripheral.identifier }
     let peripheral: CBPeripheral
     var rssi: Int
     var msd: Data?
+    var localName: String?                 // CBAdvertisementDataLocalNameKey, fresh per advertisement
+    var isLikelyOpenDisplay: Bool = true   // admission verdict; views filter on it
     var connectionState: ConnectionState = .disconnected
 
-    var name: String { peripheral.name ?? "Unknown OD Device" }
+    var name: String { peripheral.name ?? localName ?? "Unknown OD Device" }
 
     var msdHex: String? { msd?.hexString }
 

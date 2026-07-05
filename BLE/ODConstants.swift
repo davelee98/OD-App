@@ -8,7 +8,11 @@ enum AppInfo {
 enum OD {
     static let serviceUUID        = CBUUID(string: "2446")
     static let characteristicUUID = CBUUID(string: "2446")
-    static let namePrefix         = "OD"
+    /// Advertised-name prefixes recognized as OpenDisplay devices (matched case-insensitively).
+    /// Kept to "OD" on purpose: board variants (reTerminal/Hanshow/Solum) running OD firmware are
+    /// admitted via the service-UUID or manufacturer-data signals instead, so stock ESLs from
+    /// those vendors don't false-positive.
+    static let namePrefixes: [String] = ["OD"]
     static let bleChunkSize       = 230
 
     enum Cmd: UInt16 {
