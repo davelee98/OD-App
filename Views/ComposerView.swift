@@ -12,6 +12,36 @@ private let composerCanvasQueue = DispatchQueue(label: "org.opendisplay.composer
 /// The full-resolution photo is still what gets rendered and sent to the panel.
 private let canvasPreviewMaxDimension: CGFloat = 1600
 
+/// The composer's tool chips. Exactly one is active at a time (radio-style); `.photo` is the
+/// resting state (pinch/drag the background). `.draw/.text/.qr` map to a `CanvasMode`; the rest
+/// (`.adjustments/.dithering/.colorMode`) are photo-level tools that leave the canvas in `.move`.
+enum ComposerTool: String, CaseIterable, Identifiable {
+    case photo, draw, text, qr, adjustments, dithering, colorMode
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .photo: return "Photo"
+        case .draw: return "Draw"
+        case .text: return "Text"
+        case .qr: return "QR"
+        case .adjustments: return "Adjust"
+        case .dithering: return "Dithering"
+        case .colorMode: return "Color Mode"
+        }
+    }
+    var systemImage: String {
+        switch self {
+        case .photo: return "photo"
+        case .draw: return "pencil.tip"
+        case .text: return "textformat"
+        case .qr: return "qrcode"
+        case .adjustments: return "slider.horizontal.3"
+        case .dithering: return "square.grid.3x3"
+        case .colorMode: return "paintpalette"
+        }
+    }
+}
+
 /// Compose a photo for one saved e-paper display and send it. Wraps `DisplayCanvasView` (crop /
 /// zoom + annotations) and adds e-ink photo adjustments (brightness / contrast / shadows /
 /// highlight recovery / saturation), a dithered Preview, and smart defaults so a non-technical
@@ -32,7 +62,7 @@ struct ComposerView: View {
     @State private var scale: CGFloat = 1
 
     // Annotations.
-    @State private var mode: CanvasMode = .move
+    @State private var activeTool: ComposerTool = .photo
     @State private var strokes: [Stroke] = []
     @State private var textItems: [TextItem] = []
     @State private var qrItems: [QRItem] = []
@@ -45,10 +75,16 @@ struct ComposerView: View {
     @State private var pendingText = ""
     @State private var pendingTextSize: CGFloat = 32
     @State private var textColorIndex = 0
-    @State private var showTextEntry = false
     @State private var pendingQRContent = "https://opendisplay.org"
     @State private var pendingQRSize: CGFloat = 120
     @State private var qrColorIndex = 0
+    @State private var qrPlacementArmed = true         // disarmed after each stamp; re-armed by edits
+    @State private var qrContentUndoID: UUID?          // selected-QR content edits push undo once per selection
+
+    // Undo/redo: chronological snapshots of the annotation layers (photo/adjustments not covered).
+    @State private var undoStack: [CanvasSnapshot] = []
+    @State private var redoStack: [CanvasSnapshot] = []
+    @State private var showResetConfirm = false
 
     // Adjustments (neutral defaults = pass-through).
     @State private var adjustments = ImageAdjustments()
@@ -57,7 +93,8 @@ struct ComposerView: View {
     @State private var colorScheme: UInt8 = 0
     @State private var dithering: DitheringMode = .floydSteinberg
     @State private var ditheringOverridden = false
-    @State private var showAdvanced = false
+    // Render against the panel's measured ink colors (enables tone compression). Off = idealized palette.
+    @State private var useMeasuredPalette = false
 
     // Preview.
     @State private var previewImage: UIImage?
@@ -84,6 +121,17 @@ struct ComposerView: View {
         return h > 0 ? h : entity.height
     }
     private var displaySize: CGSize { CGSize(width: displayWidth, height: displayHeight) }
+
+    /// The canvas interaction mode implied by the active tool. Only Draw/Text/QR change how the
+    /// canvas responds to taps; the photo-level tools leave it in `.move` (pinch/drag background).
+    private var mode: CanvasMode {
+        switch activeTool {
+        case .draw: return .draw
+        case .text: return .text
+        case .qr: return .qr
+        case .photo, .adjustments, .dithering, .colorMode: return .move
+        }
+    }
 
     private var schemePaletteColors: [Color] {
         let rgb = ImageProcessor.palettes[colorScheme] ?? ImageProcessor.palettes[0]!
@@ -113,7 +161,9 @@ struct ComposerView: View {
         .onDisappear { connectionTimeoutTask?.cancel() }
         .onChange(of: photoItem) { _, item in loadPhoto(item) }
         .onChange(of: adjustments) { _, _ in refreshCanvasImage() }
-        .onChange(of: mode) { _, newMode in if newMode == .draw { selection = nil } }
+        .onChange(of: activeTool) { _, _ in selection = nil }
+        .onChange(of: pendingQRContent) { _, _ in qrPlacementArmed = true }
+        .onChange(of: selection) { _, _ in qrContentUndoID = nil }
         .onChange(of: ble.connectedDevice?.deviceID) { _, deviceID in
             ble.trace("Composer connectedDevice changed; target=\(entity.id), current=\(deviceID ?? "nil"), waiting=\(isWaitingForConnection)")
             if let identifier = targetIdentifier,
@@ -138,8 +188,13 @@ struct ComposerView: View {
                 applyScheme(config.colorScheme)
             }
         }
-        .sheet(isPresented: $showTextEntry) { textEntrySheet }
         .sheet(isPresented: $showPreview) { previewSheet }
+        .confirmationDialog("Reset the page?", isPresented: $showResetConfirm, titleVisibility: .visible) {
+            Button("Reset Page", role: .destructive) { resetPage() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes the photo and every annotation. This can't be undone.")
+        }
         .alert("Unable to Connect", isPresented: connectionAlertIsPresented) {
             Button("OK") { dismiss() }
         } message: {
@@ -149,14 +204,15 @@ struct ComposerView: View {
 
     // MARK: - Layouts
 
-    /// Portrait (regular height): canvas on top, controls stacked and scrolling below.
+    /// Portrait (regular height): canvas on top, then the always-visible action row, the tool
+    /// chip bar, and the selected tool's controls scrolling below.
     private var portraitLayout: some View {
         VStack(spacing: 0) {
             canvas
-            modeBar
-            toolControls
+            actionRow
+            toolChipBar
             Divider()
-            ScrollView { controlPanel }
+            ScrollView { activeToolPanel.padding() }
         }
     }
 
@@ -167,9 +223,10 @@ struct ComposerView: View {
             Divider()
             ScrollView {
                 VStack(spacing: 0) {
-                    modeBar
-                    toolControls
-                    controlPanel
+                    actionRow
+                    toolChipBar
+                    Divider()
+                    activeToolPanel.padding()
                 }
             }
             .frame(width: 340)
@@ -190,9 +247,18 @@ struct ComposerView: View {
             canvasSize: $canvasSize,
             selection: $selection,
             drawColorIndex: drawColorIndex, drawLineWidth: drawLineWidth,
-            pendingText: pendingText, pendingTextSize: pendingTextSize, textColorIndex: textColorIndex,
+            pendingText: $pendingText, pendingTextSize: pendingTextSize, textColorIndex: textColorIndex,
             pendingQRContent: pendingQRContent, pendingQRSize: pendingQRSize, qrColorIndex: qrColorIndex,
-            onRequestTextEntry: { showTextEntry = true }
+            qrPlacementEnabled: qrPlacementArmed,
+            onPlaceText: { loc in placeTextAtPoint(loc) },
+            onElementSelected: { element in
+                switch element {
+                case .text: activeTool = .text
+                case .qr: activeTool = .qr
+                }
+            },
+            onQRPlaced: { qrPlacementArmed = false },
+            onCommitUndo: { pushUndo($0) }
         )
         .padding(.horizontal)
         .padding(.top, 8)
@@ -224,23 +290,90 @@ struct ComposerView: View {
         .allowsHitTesting(true)
     }
 
-    private var modeBar: some View {
-        Picker("Mode", selection: $mode) {
-            ForEach(CanvasMode.allCases) { m in
-                Label(m.title, systemImage: m.systemImage).tag(m)
+    /// Always-visible actions directly under the canvas, independent of the selected tool.
+    private var actionRow: some View {
+        HStack(spacing: 8) {
+            Button { generatePreview() } label: {
+                Label("Preview", systemImage: "eye")
             }
+            .buttonStyle(.bordered)
+            .disabled(!hasContent)
+            .font(.caption)
+
+            Spacer()
+
+            Button { undo() } label: {
+                Image(systemName: "arrow.uturn.backward")
+            }
+            .buttonStyle(.bordered)
+            .disabled(undoStack.isEmpty)
+
+            Button { redo() } label: {
+                Image(systemName: "arrow.uturn.forward")
+            }
+            .buttonStyle(.bordered)
+            .disabled(redoStack.isEmpty)
+
+            Button(role: .destructive) { showResetConfirm = true } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.bordered)
+            .disabled(!hasContent)
         }
-        .pickerStyle(.segmented)
         .padding(.horizontal)
-        .padding(.vertical, 8)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
 
-    // MARK: - Tool controls (per mode)
+    /// Horizontally-scrolling tool chips. Exactly one is active; tapping switches tools and
+    /// reveals that tool's panel below.
+    private var toolChipBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(ComposerTool.allCases) { tool in
+                    let isActive = activeTool == tool
+                    Button { activeTool = tool } label: {
+                        Label(tool.title, systemImage: tool.systemImage)
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule().fill(isActive ? Color.accentColor : Color(.secondarySystemBackground))
+                            )
+                            .foregroundStyle(isActive ? Color.white : Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+        }
+    }
+
+    // MARK: - Active tool panel (per selected chip)
 
     @ViewBuilder
-    private var toolControls: some View {
-        switch mode {
-        case .move:
+    private var activeToolPanel: some View {
+        switch activeTool {
+        case .photo:   photoPanel
+        case .draw:    drawPanel
+        case .text:    textPanel
+        case .qr:      qrPanel
+        case .adjustments: adjustmentsSection
+        case .dithering:   ditheringPanel
+        case .colorMode:   colorModePanel
+        }
+    }
+
+    private var photoPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            PhotosPicker(selection: $photoItem, matching: .images) {
+                Label(baseImage == nil ? "Choose Photo" : "Change Photo", systemImage: "photo.on.rectangle")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+
             HStack {
                 Label("Pinch to zoom · drag to reposition", systemImage: "hand.draw")
                     .font(.caption).foregroundStyle(.secondary)
@@ -249,77 +382,214 @@ struct ComposerView: View {
                     .font(.caption).buttonStyle(.bordered)
                     .disabled(pan == .zero && scale == 1)
             }
-            .padding(.horizontal).padding(.bottom, 6)
-        case .draw:
-            VStack(alignment: .leading, spacing: 8) {
-                colorSwatchPicker(selection: $drawColorIndex)
-                HStack {
-                    Image(systemName: "line.diagonal").font(.caption).foregroundStyle(.secondary)
-                    Slider(value: $drawLineWidth, in: 1...20, step: 1)
-                    Text("\(Int(drawLineWidth))px").font(.caption).frame(width: 40)
-                }
+        }
+    }
+
+    private var drawPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "line.diagonal").font(.caption).foregroundStyle(.secondary)
+                Slider(value: $drawLineWidth, in: 1...20, step: 1)
+                Text("\(Int(drawLineWidth))px").font(.caption).frame(width: 40)
             }
-            .padding(.horizontal).padding(.bottom, 6)
-        case .text:
-            VStack(alignment: .leading, spacing: 8) {
-                colorSwatchPicker(selection: $textColorIndex)
+            colorSwatchPicker(selection: $drawColorIndex)
+        }
+    }
+
+    // Inspector pattern: with a text element selected the controls edit *it* live;
+    // otherwise they set the defaults for the next element. Tapping canvas places the pending text.
+    private var textPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let id = selectedTextID {
+                Text("Drag to move · pinch to resize")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("Text", text: textContentBinding(for: id))
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Image(systemName: "textformat.size").font(.caption).foregroundStyle(.secondary)
+                    Slider(value: textSizeBinding(for: id), in: 8...200, step: 2) { editing in
+                        if editing { pushUndo() }
+                    }
+                    Text("\(Int(textItems.first(where: { $0.id == id })?.fontSize ?? 0))pt")
+                        .font(.caption).frame(width: 44)
+                }
+                colorSwatchPicker(selection: textColorBinding(for: id, pushesUndo: true))
+            } else {
+                Text("Enter text below and tap canvas to place")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("Text", text: $pendingText)
+                    .textFieldStyle(.roundedBorder)
                 HStack {
                     Image(systemName: "textformat.size").font(.caption).foregroundStyle(.secondary)
                     Slider(value: $pendingTextSize, in: 8...200, step: 2)
                     Text("\(Int(pendingTextSize))pt").font(.caption).frame(width: 44)
-                    Button("Edit") { showTextEntry = true }.buttonStyle(.bordered)
                 }
+                colorSwatchPicker(selection: $textColorIndex)
             }
-            .padding(.horizontal).padding(.bottom, 6)
-        case .qr:
-            VStack(alignment: .leading, spacing: 8) {
-                colorSwatchPicker(selection: $qrColorIndex)
+        }
+    }
+
+    private var qrPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let id = selectedQRID {
+                Text("Editing the selected QR code · pinch to resize")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("QR content (URL or text)", text: qrContentBinding(for: id))
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                HStack {
+                    Image(systemName: "qrcode").font(.caption).foregroundStyle(.secondary)
+                    Slider(value: qrSizeBinding(for: id), in: 40...300, step: 2) { editing in
+                        if editing { pushUndo() }
+                    }
+                    Text("\(Int(qrItems.first(where: { $0.id == id })?.size ?? 0))pt")
+                        .font(.caption).frame(width: 44)
+                }
+                colorSwatchPicker(selection: qrColorBinding(for: id))
+            } else {
+                Text(qrHint)
+                    .font(.caption).foregroundStyle(.secondary)
                 TextField("QR content (URL or text)", text: $pendingQRContent)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
+                HStack {
+                    Image(systemName: "qrcode").font(.caption).foregroundStyle(.secondary)
+                    Slider(value: $pendingQRSize, in: 40...300, step: 2)
+                    Text("\(Int(pendingQRSize))pt").font(.caption).frame(width: 44)
+                    Button("Add QR") { placeQRAtCenter() }
+                        .buttonStyle(.bordered)
+                        .disabled(pendingQRContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                colorSwatchPicker(selection: $qrColorIndex)
             }
-            .padding(.horizontal).padding(.bottom, 6)
         }
     }
 
-    // MARK: - Control panel (photo, adjustments, preview, advanced)
+    private var colorModePanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Set by the display hardware — expert override only", systemImage: "exclamationmark.triangle")
+                .font(.caption).foregroundStyle(.orange)
 
-    private var controlPanel: some View {
-        VStack(spacing: 16) {
-            HStack {
-                PhotosPicker(selection: $photoItem, matching: .images) {
-                    Label(baseImage == nil ? "Choose Photo" : "Change Photo", systemImage: "photo.on.rectangle")
-                        .frame(maxWidth: .infinity)
+            Picker("Color mode", selection: $colorScheme) {
+                ForEach(ColorScheme.allCases) { scheme in
+                    Text(scheme.displayName).tag(scheme.rawValue)
                 }
-                .buttonStyle(.bordered)
-
-                Button(role: .destructive) { resetPage() } label: {
-                    Label("Reset Page", systemImage: "trash").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .disabled(!hasContent)
+            }
+            .pickerStyle(.menu)
+            .onChange(of: colorScheme) { _, _ in
+                if !ditheringOverridden { dithering = Self.smartDithering(for: colorScheme) }
+                refreshCanvasImage()
+                resetAnnotationColors()
             }
 
-            adjustmentsSection
-
-            HStack {
-                Button { generatePreview() } label: {
-                    Label("Preview", systemImage: "eye").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .disabled(!hasContent)
-
-                Button { undoLast() } label: {
-                    Label("Undo", systemImage: "arrow.uturn.backward").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .disabled(strokes.isEmpty && textItems.isEmpty && qrItems.isEmpty)
-            }
-
-            advancedSection
+            Text("This panel's color type is read from the connected display. Overriding it only changes the on-screen palette — Preview and Send still use the hardware's real mode. Change it only if you know your panel's exact type.")
+                .font(.caption2).foregroundStyle(.secondary)
         }
-        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var qrHint: String {
+        if pendingQRContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Enter QR content below to place a code"
+        }
+        return qrPlacementArmed ? "Tap the canvas to place the QR code"
+                                : "Change the content or tap Add QR to place another"
+    }
+
+    // MARK: - Selected-element inspector bindings
+
+    private var selectedTextID: UUID? {
+        if case .text(let id) = selection { return id }
+        return nil
+    }
+
+    private var selectedQRID: UUID? {
+        if case .qr(let id) = selection { return id }
+        return nil
+    }
+
+    private func textSizeBinding(for id: UUID) -> Binding<CGFloat> {
+        Binding(
+            get: { textItems.first(where: { $0.id == id })?.fontSize ?? pendingTextSize },
+            set: { newValue in
+                if let i = textItems.firstIndex(where: { $0.id == id }) { textItems[i].fontSize = newValue }
+            }
+        )
+    }
+
+    private func textContentBinding(for id: UUID) -> Binding<String> {
+        Binding(
+            get: { textItems.first(where: { $0.id == id })?.text ?? pendingText },
+            set: { newValue in
+                if let i = textItems.firstIndex(where: { $0.id == id }) { textItems[i].text = newValue }
+            }
+        )
+    }
+
+    /// Swatch index ↔ the selected text item's color. A swatch tap is a single discrete change, so
+    /// the binding itself records the undo entry (`pushesUndo`); the edit sheet passes `false`
+    /// because opening it already pushed one entry covering the whole editing session.
+    private func textColorBinding(for id: UUID, pushesUndo: Bool) -> Binding<Int> {
+        Binding(
+            get: {
+                guard let color = textItems.first(where: { $0.id == id })?.color,
+                      let index = schemePaletteColors.firstIndex(of: color) else { return textColorIndex }
+                return index
+            },
+            set: { newIndex in
+                guard let i = textItems.firstIndex(where: { $0.id == id }) else { return }
+                let newColor = schemePaletteColors[safe: newIndex] ?? .black
+                guard textItems[i].color != newColor else { return }
+                if pushesUndo { pushUndo() }
+                textItems[i].color = newColor
+                textColorIndex = newIndex
+            }
+        )
+    }
+
+    private func qrSizeBinding(for id: UUID) -> Binding<CGFloat> {
+        Binding(
+            get: { qrItems.first(where: { $0.id == id })?.size ?? pendingQRSize },
+            set: { newValue in
+                if let i = qrItems.firstIndex(where: { $0.id == id }) { qrItems[i].size = newValue }
+            }
+        )
+    }
+
+    /// Selected-QR payload edits arrive per keystroke; record one undo entry per selection so
+    /// Undo restores the pre-edit payload instead of stepping back a character at a time.
+    private func qrContentBinding(for id: UUID) -> Binding<String> {
+        Binding(
+            get: { qrItems.first(where: { $0.id == id })?.content ?? pendingQRContent },
+            set: { newValue in
+                guard let i = qrItems.firstIndex(where: { $0.id == id }) else { return }
+                if qrContentUndoID != id {
+                    pushUndo()
+                    qrContentUndoID = id
+                }
+                qrItems[i].content = newValue
+            }
+        )
+    }
+
+    private func qrColorBinding(for id: UUID) -> Binding<Int> {
+        Binding(
+            get: {
+                guard let color = qrItems.first(where: { $0.id == id })?.color,
+                      let index = schemePaletteColors.firstIndex(of: color) else { return qrColorIndex }
+                return index
+            },
+            set: { newIndex in
+                guard let i = qrItems.firstIndex(where: { $0.id == id }) else { return }
+                let newColor = schemePaletteColors[safe: newIndex] ?? .black
+                guard qrItems[i].color != newColor else { return }
+                pushUndo()
+                qrItems[i].color = newColor
+                qrColorIndex = newIndex
+            }
+        )
     }
 
     /// Grayscale schemes (0 = B/W, 5 = 4-gray, 6 = 16-gray) have no color to saturate.
@@ -340,7 +610,14 @@ struct ComposerView: View {
 
     private var adjustmentsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Adjustments", systemImage: "slider.horizontal.3").font(.subheadline).bold()
+            HStack {
+                Label("Adjustments", systemImage: "slider.horizontal.3").font(.subheadline).bold()
+                Spacer()
+                if !adjustments.isNeutral {
+                    Button("Reset adjustments") { adjustments = .neutral }
+                        .font(.caption)
+                }
+            }
             adjustmentSlider(icon: "circle.lefthalf.filled", title: "Brightness",
                              value: $adjustments.brightness, range: -0.4...0.4, neutral: 0)
             adjustmentSlider(icon: "circle.righthalf.filled", title: "Contrast",
@@ -353,11 +630,40 @@ struct ComposerView: View {
                 adjustmentSlider(icon: "drop.halffull", title: "Saturation",
                                  value: $adjustments.saturation, range: 0...2, neutral: 1)
             }
-            if !adjustments.isNeutral {
-                Button("Reset adjustments") { adjustments = .neutral }
-                    .font(.caption)
-            }
         }
+    }
+
+    private var ditheringPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Dithering", systemImage: "square.grid.3x3").font(.subheadline).bold()
+
+            Toggle(isOn: $useMeasuredPalette) {
+                Label("Measured palette", systemImage: "swatchpalette").font(.caption)
+            }
+            .onChange(of: useMeasuredPalette) { _, _ in refreshCanvasImage() }
+            Text("Simulates the panel's real ink colors. Enables Tone compression.")
+                .font(.caption2).foregroundStyle(.secondary)
+
+            adjustmentSlider(icon: "arrow.down.right.and.arrow.up.left", title: "Tone",
+                             value: $adjustments.toneCompression, range: 0...1, neutral: 0)
+                .disabled(!useMeasuredPalette)
+                .opacity(useMeasuredPalette ? 1 : 0.4)
+
+            Divider().padding(.vertical, 2)
+
+            HStack(spacing: 10) {
+                Image(systemName: "square.grid.3x3").font(.caption).foregroundStyle(.secondary).frame(width: 20)
+                Text("Dithering").font(.caption).frame(width: 78, alignment: .leading)
+                Picker("Dithering", selection: $dithering) {
+                    ForEach(DitheringMode.allCases) { m in Text(m.displayName).tag(m) }
+                }
+                .pickerStyle(.menu)
+                .onChange(of: dithering) { _, _ in ditheringOverridden = true }
+            }
+            Text("Defaults are chosen for this panel's palette. Atkinson suits black-and-white e-ink; Floyd-Steinberg suits multi-color.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func adjustmentSlider(icon: String, title: String,
@@ -374,33 +680,6 @@ struct ComposerView: View {
             .buttonStyle(.borderless)
             .disabled(value.wrappedValue == neutral)
         }
-    }
-
-    private var advancedSection: some View {
-        DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
-            VStack(alignment: .leading, spacing: 12) {
-                Picker("Color mode", selection: $colorScheme) {
-                    ForEach(ColorScheme.allCases) { scheme in
-                        Text(scheme.displayName).tag(scheme.rawValue)
-                    }
-                }
-                .onChange(of: colorScheme) { _, _ in
-                    if !ditheringOverridden { dithering = Self.smartDithering(for: colorScheme) }
-                    refreshCanvasImage()
-                    resetAnnotationColors()
-                }
-
-                Picker("Dithering", selection: $dithering) {
-                    ForEach(DitheringMode.allCases) { m in Text(m.displayName).tag(m) }
-                }
-                .onChange(of: dithering) { _, _ in ditheringOverridden = true }
-
-                Text("Defaults are chosen for this panel's palette. Atkinson suits black-and-white e-ink; Floyd-Steinberg suits multi-color.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-            .padding(.top, 6)
-        }
-        .font(.subheadline.weight(.semibold))
     }
 
     @ViewBuilder
@@ -433,29 +712,8 @@ struct ComposerView: View {
             } label: {
                 Label("Send", systemImage: "paperplane.fill")
             }
+            .labelStyle(.titleAndIcon)
             .disabled(device?.connectionState != .connected || device?.isUploading == true || !hasContent)
-        }
-    }
-
-    private var textEntrySheet: some View {
-        NavigationStack {
-            Form {
-                Section("Text") { TextField("Enter text", text: $pendingText) }
-                Section("Size") {
-                    HStack {
-                        Slider(value: $pendingTextSize, in: 8...200, step: 2)
-                        Text("\(Int(pendingTextSize))pt").frame(width: 48)
-                    }
-                }
-                Section("Color") {
-                    colorSwatchPicker(selection: $textColorIndex).listRowInsets(EdgeInsets()).padding()
-                }
-            }
-            .navigationTitle("Add Text")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { showTextEntry = false } }
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { pendingText = ""; showTextEntry = false } }
-            }
         }
     }
 
@@ -606,8 +864,13 @@ struct ComposerView: View {
         canvasRenderToken &+= 1
         let token = canvasRenderToken
         let a = adjustments
+        let scheme = colorScheme
+        let measured = useMeasuredPalette
         composerCanvasQueue.async {
-            let adjusted = ImageProcessor.adjust(preview, adjustments: a)
+            var adjusted = ImageProcessor.adjust(preview, adjustments: a)
+            if measured, a.toneCompression > 0 {
+                adjusted = ImageProcessor.compressTone(adjusted, colorScheme: scheme, strength: Double(a.toneCompression))
+            }
             DispatchQueue.main.async {
                 guard token == self.canvasRenderToken else { return }   // a newer adjustment won
                 self.canvasImage = adjusted
@@ -623,7 +886,7 @@ struct ComposerView: View {
         pan = .zero; scale = 1
 
         // Annotations.
-        mode = .move
+        activeTool = .photo
         strokes.removeAll(); textItems.removeAll(); qrItems.removeAll()
         selection = nil
 
@@ -633,10 +896,14 @@ struct ComposerView: View {
         pendingText = ""
         pendingTextSize = 32
         textColorIndex = 0
-        showTextEntry = false
         pendingQRContent = "https://opendisplay.org"
         pendingQRSize = 120
         qrColorIndex = 0
+        qrPlacementArmed = true
+
+        // Undo history covers only annotations; a full reset invalidates it.
+        undoStack.removeAll()
+        redoStack.removeAll()
 
         // Adjustments.
         adjustments = .neutral
@@ -644,18 +911,76 @@ struct ComposerView: View {
         // Dithering. Re-derive the scheme from the connected panel so Preview and Send agree;
         // clear the override first so applyScheme reapplies the smart dithering default.
         ditheringOverridden = false
+        useMeasuredPalette = false
         applyScheme(device?.config?.colorScheme ?? UInt8(clamping: entity.colorScheme))
-        showAdvanced = false
 
         // Preview.
         previewImage = nil
         showPreview = false
     }
 
-    private func undoLast() {
-        if !strokes.isEmpty { strokes.removeLast() }
-        else if !textItems.isEmpty { textItems.removeLast() }
-        else if !qrItems.isEmpty { qrItems.removeLast() }
+    // MARK: - Text placement / editing
+
+    /// Place the pending text at the given position, select it, and clear the buffer.
+    private func placeTextAtPoint(_ position: CGPoint) {
+        let trimmed = pendingText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        pushUndo()
+        let item = TextItem(text: trimmed, fontSize: pendingTextSize,
+                            color: schemePaletteColors[safe: textColorIndex] ?? .black,
+                            position: position)
+        textItems.append(item)
+        selection = .text(item.id)
+    }
+
+    // MARK: - QR placement
+
+    private func placeQRAtCenter() {
+        let content = pendingQRContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty else { return }
+        pushUndo()
+        let box = canvasSize
+        let size = box.width > 0 ? min(max(pendingQRSize, 24), max(min(box.width, box.height), 24))
+                                 : pendingQRSize
+        let item = QRItem(content: content, size: size,
+                          color: schemePaletteColors[safe: qrColorIndex] ?? .black,
+                          position: CGPoint(x: max(box.width, 1) / 2, y: max(box.height, 1) / 2))
+        qrItems.append(item)
+        selection = .qr(item.id)
+        qrPlacementArmed = false
+    }
+
+    // MARK: - Undo / redo
+
+    private func currentSnapshot() -> CanvasSnapshot {
+        CanvasSnapshot(strokes: strokes, textItems: textItems, qrItems: qrItems)
+    }
+
+    private func applySnapshot(_ snap: CanvasSnapshot) {
+        strokes = snap.strokes
+        textItems = snap.textItems
+        qrItems = snap.qrItems
+    }
+
+    /// Record the state to restore on Undo. Pass the pre-mutation snapshot when the change already
+    /// happened (the canvas does this); omit it to capture current state before mutating.
+    private func pushUndo(_ snap: CanvasSnapshot? = nil) {
+        undoStack.append(snap ?? currentSnapshot())
+        redoStack.removeAll()
+        if undoStack.count > 60 { undoStack.removeFirst() }
+    }
+
+    private func undo() {
+        guard let snap = undoStack.popLast() else { return }
+        redoStack.append(currentSnapshot())
+        applySnapshot(snap)
+        selection = nil
+    }
+
+    private func redo() {
+        guard let snap = redoStack.popLast() else { return }
+        undoStack.append(currentSnapshot())
+        applySnapshot(snap)
         selection = nil
     }
 
@@ -669,9 +994,12 @@ struct ComposerView: View {
         let w = displayWidth, h = displayHeight
         let scheme = device?.config?.colorScheme ?? colorScheme
         let dith = dithering
+        let measured = useMeasuredPalette
+        let tone = Double(adjustments.toneCompression)
         DispatchQueue.global(qos: .userInitiated).async {
             let preview = ImageProcessor.preview(image: composite, width: w, height: h,
-                                                 colorScheme: scheme, dithering: dith)
+                                                 colorScheme: scheme, dithering: dith,
+                                                 useMeasuredPalette: measured, toneCompression: tone)
             DispatchQueue.main.async { self.previewImage = preview }
         }
     }
@@ -687,9 +1015,12 @@ struct ComposerView: View {
         let w = displayWidth, h = displayHeight
         let scheme = deviceConfig.colorScheme
         let dith = dithering
+        let measured = useMeasuredPalette
+        let tone = Double(adjustments.toneCompression)
         DispatchQueue.global(qos: .userInitiated).async {
             guard let pixels = ImageProcessor.process(image: composite, width: w, height: h,
-                                                      colorScheme: scheme, dithering: dith) else {
+                                                      colorScheme: scheme, dithering: dith,
+                                                      useMeasuredPalette: measured, toneCompression: tone) else {
                 DispatchQueue.main.async {
                     device.lastError = "Could not render the image for this display's color scheme."
                 }

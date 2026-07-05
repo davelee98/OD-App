@@ -33,13 +33,24 @@ struct DisplayCanvasView: View {
     // Annotation authoring parameters (current tool settings).
     var drawColorIndex: Int = 0
     var drawLineWidth: CGFloat = 3
-    var pendingText: String = ""
+    var pendingText: Binding<String>?
     var pendingTextSize: CGFloat = 32
     var textColorIndex: Int = 0
     var pendingQRContent: String = ""
     var pendingQRSize: CGFloat = 120
     var qrColorIndex: Int = 0
-    var onRequestTextEntry: () -> Void = {}
+    /// Gates tap-to-place in `.qr` mode: the Composer disarms placement after each stamp so a
+    /// stray tap can't drop duplicate codes; editing the content re-arms it.
+    var qrPlacementEnabled: Bool = true
+    /// Called to place a text item at the given position. The Composer provides the tap location.
+    var onPlaceText: (CGPoint) -> Void = { _ in }
+    /// Called when a text or QR element is selected on the canvas (for switching tool chips).
+    var onElementSelected: (SelectedElement) -> Void = { _ in }
+    /// A QR was just stamped — lets the Composer disarm further tap-to-place.
+    var onQRPlaced: () -> Void = {}
+    /// Called with the *pre-mutation* snapshot whenever the canvas changes annotation state
+    /// (place / move / resize / delete / duplicate / reorder) — the Composer's undo stack.
+    var onCommitUndo: (CanvasSnapshot) -> Void = { _ in }
 
     // Live drawing + gesture accumulators.
     @State private var currentStroke: Stroke?
@@ -50,6 +61,12 @@ struct DisplayCanvasView: View {
     @State private var dragStarted = false
     @State private var dragTarget: SelectedElement?
     @State private var dragOrigin: CGPoint?
+    @State private var dragExceededSlop = false
+    @State private var preDragSnapshot: CanvasSnapshot?
+
+    // Pinch-resize accumulators (captured once at the first onChanged of a pinch that has a selection).
+    @State private var resizeSnapshot: CanvasSnapshot?
+    @State private var resizeBaseValue: CGFloat?
 
     /// A tap moves the finger less than this; beyond it the gesture is treated as a drag.
     private let tapSlop: CGFloat = 10
@@ -87,7 +104,7 @@ struct DisplayCanvasView: View {
             .frame(width: box.width, height: box.height)
             .clipped()
             .contentShape(Rectangle())
-            .simultaneousGesture(zoomGesture)
+            .simultaneousGesture(zoomGesture(box: box))
             .border(Color(.systemGray4), width: 1)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear { canvasSize = box }
@@ -171,9 +188,11 @@ struct DisplayCanvasView: View {
         }
     }
 
-    /// Selection chrome for the currently selected element — a dashed accent border plus a delete
-    /// button. Sits *above* `interactionLayer` so the real `Button` wins touches over the clear layer
-    /// below. The rect is derived by ID lookup each render, so a stale selection (undo/reset) vanishes.
+    /// Selection chrome for the currently selected element — a dashed accent border plus corner
+    /// controls: delete (top-right) and a context menu (top-left). Resizing is a pinch gesture on
+    /// the selected element rather than a chrome control (see `zoomGesture`). Sits *above*
+    /// `interactionLayer` so the real controls win touches over the clear layer below. The rect is
+    /// derived by ID lookup each render, so a stale selection (undo/reset) vanishes.
     @ViewBuilder
     private func selectionChrome(box: CGSize) -> some View {
         if let selection, let rect = frame(of: selection) {
@@ -186,13 +205,32 @@ struct DisplayCanvasView: View {
             Button {
                 delete(selection)
             } label: {
-                Image(systemName: "xmark.circle.fill")
+                Image(systemName: "trash.circle.fill")
                     .font(.title3)
                     .symbolRenderingMode(.palette)
                     .foregroundStyle(.white, .red)
                     .background(Circle().fill(.white).padding(3))
             }
-            .position(deleteButtonPosition(for: rect, in: box))
+            .position(cornerPosition(x: rect.maxX, y: rect.minY, in: box))
+
+            Menu {
+                Button { duplicate(selection, in: box) } label: {
+                    Label("Duplicate", systemImage: "plus.square.on.square")
+                }
+                Button { bringToFront(selection) } label: {
+                    Label("Bring to Front", systemImage: "square.stack.3d.up")
+                }
+                Button(role: .destructive) { delete(selection) } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle.fill")
+                    .font(.title3)
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, Color.accentColor)
+                    .background(Circle().fill(.white).padding(3))
+            }
+            .position(cornerPosition(x: rect.minX, y: rect.minY, in: box))
         }
     }
 
@@ -226,19 +264,76 @@ struct DisplayCanvasView: View {
         return nil
     }
 
-    private func deleteButtonPosition(for rect: CGRect, in box: CGSize) -> CGPoint {
-        // Clamp inside the box — the ZStack is .clipped(), so an off-box button is untappable.
+    private func cornerPosition(x: CGFloat, y: CGFloat, in box: CGSize) -> CGPoint {
+        // Clamp inside the box — the ZStack is .clipped(), so an off-box control is untappable.
         let inset: CGFloat = 14
-        return CGPoint(x: min(max(rect.maxX, inset), box.width - inset),
-                       y: min(max(rect.minY, inset), box.height - inset))
+        return CGPoint(x: min(max(x, inset), box.width - inset),
+                       y: min(max(y, inset), box.height - inset))
+    }
+
+    private func snapshot() -> CanvasSnapshot {
+        CanvasSnapshot(strokes: strokes, textItems: textItems, qrItems: qrItems)
     }
 
     private func delete(_ selection: SelectedElement) {
+        onCommitUndo(snapshot())
         switch selection {
         case .text(let id): textItems.removeAll { $0.id == id }
         case .qr(let id):   qrItems.removeAll { $0.id == id }
         }
         self.selection = nil
+    }
+
+    private func duplicate(_ selection: SelectedElement, in box: CGSize) {
+        switch selection {
+        case .text(let id):
+            guard let src = textItems.first(where: { $0.id == id }) else { return }
+            onCommitUndo(snapshot())
+            let copy = TextItem(text: src.text, fontSize: src.fontSize, color: src.color,
+                                position: clamp(CGPoint(x: src.position.x + 16, y: src.position.y + 16), in: box))
+            textItems.append(copy)
+            self.selection = .text(copy.id)
+        case .qr(let id):
+            guard let src = qrItems.first(where: { $0.id == id }) else { return }
+            onCommitUndo(snapshot())
+            let copy = QRItem(content: src.content, size: src.size, color: src.color,
+                              position: clamp(CGPoint(x: src.position.x + 16, y: src.position.y + 16), in: box))
+            qrItems.append(copy)
+            self.selection = .qr(copy.id)
+        }
+    }
+
+    /// Move the element to the end of its array — last-drawn wins both rendering and hit-testing.
+    /// (QR still always renders above text; ordering is within each type.)
+    private func bringToFront(_ selection: SelectedElement) {
+        switch selection {
+        case .text(let id):
+            guard let i = textItems.firstIndex(where: { $0.id == id }), i != textItems.count - 1 else { return }
+            onCommitUndo(snapshot())
+            textItems.append(textItems.remove(at: i))
+        case .qr(let id):
+            guard let i = qrItems.firstIndex(where: { $0.id == id }), i != qrItems.count - 1 else { return }
+            onCommitUndo(snapshot())
+            qrItems.append(qrItems.remove(at: i))
+        }
+    }
+
+    private func sizeValue(of target: SelectedElement) -> CGFloat? {
+        switch target {
+        case .text(let id): return textItems.first { $0.id == id }?.fontSize
+        case .qr(let id):   return qrItems.first { $0.id == id }?.size
+        }
+    }
+
+    private func setSize(of target: SelectedElement, to value: CGFloat, in box: CGSize) {
+        switch target {
+        case .text(let id):
+            guard let i = textItems.firstIndex(where: { $0.id == id }) else { return }
+            textItems[i].fontSize = min(max(value, 8), 200)
+        case .qr(let id):
+            guard let i = qrItems.firstIndex(where: { $0.id == id }) else { return }
+            qrItems[i].size = min(max(value, 24), max(min(box.width, box.height), 24))
+        }
     }
 
     private func move(_ target: SelectedElement, to position: CGPoint) {
@@ -261,10 +356,33 @@ struct DisplayCanvasView: View {
 
     // MARK: - Gestures
 
-    private var zoomGesture: some Gesture {
+    /// Pinch gesture: with an element selected, scales *that element* (font size / QR size) around
+    /// its fixed center — `value` is already a relative scale factor, so resize is just
+    /// `base size × value`. With nothing selected, it zooms the photo as before.
+    private func zoomGesture(box: CGSize) -> some Gesture {
         MagnificationGesture()
-            .onChanged { value in scale = max(1, baseScale * value) }
-            .onEnded { _ in baseScale = scale }
+            .onChanged { value in
+                if let target = selection {
+                    if resizeBaseValue == nil {
+                        resizeSnapshot = snapshot()
+                        resizeBaseValue = sizeValue(of: target)
+                    }
+                    if let base = resizeBaseValue {
+                        setSize(of: target, to: base * value, in: box)
+                    }
+                } else {
+                    scale = max(1, baseScale * value)
+                }
+            }
+            .onEnded { _ in
+                if selection != nil {
+                    if let snap = resizeSnapshot, snap != snapshot() { onCommitUndo(snap) }
+                    resizeSnapshot = nil
+                    resizeBaseValue = nil
+                } else {
+                    baseScale = scale
+                }
+            }
     }
 
     private var drawGesture: some Gesture {
@@ -278,13 +396,18 @@ struct DisplayCanvasView: View {
                 }
             }
             .onEnded { _ in
-                if let s = currentStroke, s.points.count > 1 { strokes.append(s) }
+                if let s = currentStroke, s.points.count > 1 {
+                    onCommitUndo(snapshot())
+                    strokes.append(s)
+                }
                 currentStroke = nil
             }
     }
 
     /// Unified tap+drag gesture for `.move`/`.text`/`.qr`. A near-stationary gesture is a tap
-    /// (select / place / deselect); movement drags the hit element, or pans the photo in `.move`.
+    /// (select / edit / place / deselect); movement drags the hit element, or pans the photo in
+    /// `.move`. Element moves only begin once the finger clears `tapSlop`, so a plain tap never
+    /// nudges the element it selects.
     private func selectionGesture(box: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { v in
@@ -293,8 +416,14 @@ struct DisplayCanvasView: View {
                     dragStarted = true
                     dragTarget = hitTest(v.startLocation)
                     dragOrigin = dragTarget.flatMap(originOf)
+                    if dragTarget != nil { preDragSnapshot = snapshot() }
                 }
                 if let target = dragTarget, let origin = dragOrigin {
+                    if !dragExceededSlop,
+                       abs(v.translation.width) < tapSlop, abs(v.translation.height) < tapSlop {
+                        return   // still within tap territory — don't move yet
+                    }
+                    dragExceededSlop = true
                     move(target, to: clamp(CGPoint(x: origin.x + v.translation.width,
                                                    y: origin.y + v.translation.height), in: box))
                 } else if mode == .move {
@@ -305,47 +434,57 @@ struct DisplayCanvasView: View {
             .onEnded { v in
                 let isTap = abs(v.translation.width) < tapSlop && abs(v.translation.height) < tapSlop
                 if isTap {
-                    handleTap(at: v.location)
-                } else if dragTarget == nil, mode == .move {
+                    handleTap(at: v.location, in: box)
+                } else if dragTarget != nil {
+                    if dragExceededSlop, let snap = preDragSnapshot { onCommitUndo(snap) }
+                } else if mode == .move {
                     basePan = pan   // photo pan committed
                 }
                 dragStarted = false
                 dragTarget = nil
                 dragOrigin = nil
+                dragExceededSlop = false
+                preDragSnapshot = nil
             }
     }
 
-    /// Tap logic per mode: `.move` selects/deselects; `.text`/`.qr` select a hit, else deselect if
-    /// something is selected (guards accidental placement), else place a new item and select it.
-    private func handleTap(at loc: CGPoint) {
+    /// Tap logic per mode: a hit selects; tapping empty space deselects first (guards accidental placement).
+    /// In `.text` mode with nothing selected, empty space places a text item at that location
+    /// (the Composer provides the pending text, size, and color).
+    private func handleTap(at loc: CGPoint, in box: CGSize) {
         switch mode {
         case .draw:
             break
         case .move:
-            selection = hitTest(loc)
+            let hit = hitTest(loc)
+            selection = hit
+            if let hit { onElementSelected(hit) }
         case .text:
             if let hit = hitTest(loc) {
                 selection = hit
+                onElementSelected(hit)
             } else if selection != nil {
                 selection = nil
-            } else if pendingText.isEmpty {
-                onRequestTextEntry()
             } else {
-                let item = TextItem(text: pendingText, fontSize: pendingTextSize,
-                                    color: color(textColorIndex), position: loc)
-                textItems.append(item)
-                selection = .text(item.id)
+                onPlaceText(loc)
             }
         case .qr:
             if let hit = hitTest(loc) {
                 selection = hit
+                onElementSelected(hit)
             } else if selection != nil {
                 selection = nil
-            } else {
-                let item = QRItem(content: pendingQRContent, size: pendingQRSize,
+            } else if qrPlacementEnabled {
+                let content = pendingQRContent.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !content.isEmpty else { return }
+                onCommitUndo(snapshot())
+                let size = min(max(pendingQRSize, 24), max(min(box.width, box.height), 24))
+                let item = QRItem(content: content, size: size,
                                   color: color(qrColorIndex), position: loc)
                 qrItems.append(item)
                 selection = .qr(item.id)
+                onElementSelected(.qr(item.id))
+                onQRPlaced()
             }
         }
     }
@@ -429,14 +568,14 @@ enum SelectedElement: Equatable {
     case qr(UUID)
 }
 
-struct Stroke: Identifiable {
+struct Stroke: Identifiable, Equatable {
     let id = UUID()
     var color: Color
     var lineWidth: CGFloat
     var points: [CGPoint]
 }
 
-struct TextItem: Identifiable {
+struct TextItem: Identifiable, Equatable {
     let id = UUID()
     var text: String
     var fontSize: CGFloat
@@ -444,12 +583,20 @@ struct TextItem: Identifiable {
     var position: CGPoint
 }
 
-struct QRItem: Identifiable {
+struct QRItem: Identifiable, Equatable {
     let id = UUID()
     var content: String
     var size: CGFloat
     var color: Color
     var position: CGPoint
+}
+
+/// Value snapshot of all annotation layers — one entry in the Composer's undo/redo history.
+/// Copies preserve element `id`s (value structs), so restoring a snapshot keeps identity stable.
+struct CanvasSnapshot: Equatable {
+    var strokes: [Stroke]
+    var textItems: [TextItem]
+    var qrItems: [QRItem]
 }
 
 extension Array {

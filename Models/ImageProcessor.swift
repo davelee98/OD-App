@@ -15,8 +15,15 @@ struct ImageAdjustments: Equatable {
     var shadows:    Float = 0     // CIHighlightShadowAdjust.shadowAmount   slider -1...1
     var highlights: Float = 1     // CIHighlightShadowAdjust.highlightAmount slider 0.3...1 (1 = neutral)
     var saturation: Float = 1     // CIColorControls.saturation             slider 0...2 (color schemes only)
+    var toneCompression: Float = 0 // dynamic-range compression toward the panel's measured range 0...1 (0 = off)
     static let neutral = ImageAdjustments()
     var isNeutral: Bool { self == .neutral }
+
+    /// Whether any *Core Image* adjustment differs from neutral. Tone compression is applied by a
+    /// separate CPU pass (not Core Image), so a tone-only change should skip the CI filters entirely.
+    var hasCoreImageAdjustments: Bool {
+        brightness != 0 || contrast != 1 || shadows != 0 || highlights != 1 || saturation != 1
+    }
 }
 
 // MARK: - Dithering Mode
@@ -62,6 +69,23 @@ enum ImageProcessor {
         6: Array((0..<16).map { i -> RGB in let v = Float(i * 17); return (v,v,v) }),  // 16-gray
     ]
 
+    /// Photographically *measured* display ink colors, index-aligned to `palettes` (the wire contract).
+    /// Sourced from epaper-dithering `measured_palettes.rs`, reordered to the app's wire index order.
+    /// Used only when the user enables the "Measured palette" switch — real e-paper black is not 0 and
+    /// white is a dull gray-cyan, which is what makes tone compression meaningful. Schemes 5/6 have no
+    /// measured data, so they lerp in sRGB between the MONO black/white endpoints (only the mid colors
+    /// are approximated; tone compression reads only indices 0 and 1).
+    static let measuredPalettes: [UInt8: [RGB]] = [
+        0: [(5,5,5), (220,220,220)],                                          // MONO_4_26
+        1: [(5,5,5), (200,200,200), (120,15,5)],                              // B/W+Red   (HANSHOW/SOLUM_BWR)
+        2: [(5,5,5), (200,200,200), (200,180,0)],                             // B/W+Yellow (HANSHOW_BWY)
+        3: [(5,5,5), (200,200,200), (200,180,0), (120,15,5)],                 // B/W+Y+R   (BWRY_4_2, app order b,w,y,r)
+        4: [(26,13,35), (185,202,205), (40,82,57), (0,69,139), (121,9,0), (202,184,0)],
+                                                                              // 6-color   (SPECTRA_7_3_6COLOR, app order k,w,g,b,r,y)
+        5: Array((0..<4).map { i -> RGB in let v = Float(5) + Float(i) * (220 - 5) / 3; return (v,v,v) }),   // 4-gray
+        6: Array((0..<16).map { i -> RGB in let v = Float(5) + Float(i) * (220 - 5) / 15; return (v,v,v) }), // 16-gray
+    ]
+
     static func expectedPackedByteCount(width: Int, height: Int, colorScheme: UInt8) -> Int {
         let pixels = width * height
         switch colorScheme {
@@ -77,9 +101,11 @@ enum ImageProcessor {
 
     /// Process a UIImage into packed wire-format bytes ready for BLE upload.
     static func process(image: UIImage, width: Int, height: Int,
-                        colorScheme: UInt8, dithering: DitheringMode) -> Data? {
+                        colorScheme: UInt8, dithering: DitheringMode,
+                        useMeasuredPalette: Bool = false, toneCompression: Double = 0) -> Data? {
         guard let cgImage = image.cgImage else { return nil }
-        let palette = palettes[colorScheme] ?? palettes[0]!
+        let palette = (useMeasuredPalette ? measuredPalettes[colorScheme] : nil)
+                    ?? palettes[colorScheme] ?? palettes[0]!
 
         // Render into RGBA buffer at target size
         let pixels = rgbaPixels(from: cgImage, width: width, height: height)
@@ -87,6 +113,11 @@ enum ImageProcessor {
 
         // Extract float RGB planes for dithering
         var floatPixels = toFloat(pixels, count: width * height)
+
+        // Compress the photo's dynamic range into the panel's measured black/white range.
+        if useMeasuredPalette {
+            compressDynamicRange(&floatPixels, colorScheme: colorScheme, strength: toneCompression)
+        }
 
         // Apply dithering
         applyDithering(&floatPixels, width: width, height: height,
@@ -102,11 +133,16 @@ enum ImageProcessor {
     // MARK: - Preview (apply dithering to UIImage for display)
 
     static func preview(image: UIImage, width: Int, height: Int,
-                        colorScheme: UInt8, dithering: DitheringMode) -> UIImage? {
+                        colorScheme: UInt8, dithering: DitheringMode,
+                        useMeasuredPalette: Bool = false, toneCompression: Double = 0) -> UIImage? {
         guard let cgImage = image.cgImage else { return nil }
-        let palette = palettes[colorScheme] ?? palettes[0]!
+        let palette = (useMeasuredPalette ? measuredPalettes[colorScheme] : nil)
+                    ?? palettes[colorScheme] ?? palettes[0]!
         var pixels = rgbaPixels(from: cgImage, width: width, height: height)
         var floatPixels = toFloat(pixels, count: width * height)
+        if useMeasuredPalette {
+            compressDynamicRange(&floatPixels, colorScheme: colorScheme, strength: toneCompression)
+        }
         applyDithering(&floatPixels, width: width, height: height, palette: palette, mode: dithering)
         let indexed = quantize(floatPixels, palette: palette)
         // Map indices back to palette RGB and write into pixels
@@ -129,7 +165,7 @@ enum ImageProcessor {
     /// **CIHighlightShadowAdjust → CIColorControls**. High-contrast, dithered e-ink
     /// panels benefit from these before quantization.
     static func adjust(_ image: UIImage, adjustments: ImageAdjustments) -> UIImage {
-        guard !adjustments.isNeutral, let cgImage = image.cgImage else { return image }
+        guard adjustments.hasCoreImageAdjustments, let cgImage = image.cgImage else { return image }
         let extent = CIImage(cgImage: cgImage).extent
         var ci = CIImage(cgImage: cgImage)
 
@@ -156,6 +192,94 @@ enum ImageProcessor {
         // packing depends on exact pixel dimensions.
         guard let out = ciContext.createCGImage(ci, from: extent) else { return image }
         return UIImage(cgImage: out, scale: image.scale, orientation: image.imageOrientation)
+    }
+
+    // MARK: - Tone Compression (dynamic-range compression)
+
+    /// sRGB IEC 61966-2-1 electro-optical transfer (gamma → linear). Port of `color_space.rs`.
+    static func srgbToLinear(_ v: Double) -> Double {
+        v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+    }
+
+    /// Inverse of `srgbToLinear` (linear → gamma).
+    static func linearToSrgb(_ l: Double) -> Double {
+        l <= 0.0031308 ? l * 12.92 : 1.055 * pow(l, 1.0 / 2.4) - 0.055
+    }
+
+    /// Rec.709 / sRGB linear luminance coefficients (tone_map.rs).
+    static func luminance(_ r: Double, _ g: Double, _ b: Double) -> Double {
+        0.2126729 * r + 0.7151522 * g + 0.0721750 * b
+    }
+
+    /// Linear luminance of a palette entry (sRGB 0-255).
+    private static func linearLuminance(_ c: RGB) -> Double {
+        luminance(srgbToLinear(Double(c.r) / 255),
+                  srgbToLinear(Double(c.g) / 255),
+                  srgbToLinear(Double(c.b) / 255))
+    }
+
+    /// Fixed-strength dynamic-range compression of a single linear-RGB pixel toward the display's
+    /// `[blackY, whiteY]` luminance range. Formula-for-formula port of `compress_dynamic_range`
+    /// (epaper-dithering tone_map.rs:121-161); Double throughout for exactness.
+    static func toneMapPixel(_ rgb: (Double, Double, Double),
+                             blackY: Double, whiteY: Double, strength: Double) -> (Double, Double, Double) {
+        var (r, g, b) = rgb
+        let displayRange = whiteY - blackY
+        let y = luminance(r, g, b)
+        let compressedY = blackY + y * displayRange
+        let targetY = y + strength * (compressedY - y)
+        if y > 1e-6 {
+            let scale = min(max(targetY / y, 0), 1e6)
+            r = min(max(r * scale, 0), 1); g = min(max(g * scale, 0), 1); b = min(max(b * scale, 0), 1)
+        } else {
+            // Near-black: preserve channel ratios, scaling the brightest channel toward blackY·strength.
+            let blendedBlack = blackY * strength
+            let maxCh = max(r, max(g, b))
+            if maxCh > 1e-12 {
+                let scale = blendedBlack / maxCh
+                r = min(max(r * scale, 0), 1); g = min(max(g * scale, 0), 1); b = min(max(b * scale, 0), 1)
+            } else {
+                r = blendedBlack; g = blendedBlack; b = blendedBlack
+            }
+        }
+        return (r, g, b)
+    }
+
+    /// Apply tone compression across the app's interleaved float RGB planes (sRGB 0-255). Converts each
+    /// pixel to linear, remaps via `toneMapPixel`, and converts back — keeping float precision (no u8
+    /// round-trip). No-op unless `strength > 0` and a measured palette exists with positive range.
+    static func compressDynamicRange(_ pixels: inout [Float], colorScheme: UInt8, strength: Double) {
+        guard strength > 0, let pal = measuredPalettes[colorScheme], pal.count >= 2 else { return }
+        let blackY = linearLuminance(pal[0])
+        let whiteY = linearLuminance(pal[1])
+        guard whiteY - blackY > 0 else { return }
+        let n = pixels.count / 3
+        for i in 0..<n {
+            let lin = (srgbToLinear(Double(pixels[i*3+0]) / 255),
+                       srgbToLinear(Double(pixels[i*3+1]) / 255),
+                       srgbToLinear(Double(pixels[i*3+2]) / 255))
+            let (r, g, b) = toneMapPixel(lin, blackY: blackY, whiteY: whiteY, strength: strength)
+            pixels[i*3+0] = Float(linearToSrgb(r) * 255)
+            pixels[i*3+1] = Float(linearToSrgb(g) * 255)
+            pixels[i*3+2] = Float(linearToSrgb(b) * 255)
+        }
+    }
+
+    /// Live-canvas convenience: apply tone compression to a whole UIImage (for the on-screen preview).
+    /// The final send re-derives compression inside `process`, so this is a display-only approximation.
+    static func compressTone(_ image: UIImage, colorScheme: UInt8, strength: Double) -> UIImage {
+        guard strength > 0, let cgImage = image.cgImage else { return image }
+        let w = cgImage.width, h = cgImage.height
+        var pixels = rgbaPixels(from: cgImage, width: w, height: h)
+        guard !pixels.isEmpty else { return image }
+        var floatPixels = toFloat(pixels, count: w * h)
+        compressDynamicRange(&floatPixels, colorScheme: colorScheme, strength: strength)
+        for i in 0..<(w * h) {
+            pixels[i*4+0] = UInt8(min(max(floatPixels[i*3+0], 0), 255))
+            pixels[i*4+1] = UInt8(min(max(floatPixels[i*3+1], 0), 255))
+            pixels[i*4+2] = UInt8(min(max(floatPixels[i*3+2], 0), 255))
+        }
+        return uiImage(from: pixels, width: w, height: h) ?? image
     }
 
     // MARK: - Pixel Helpers
