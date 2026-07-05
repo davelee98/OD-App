@@ -5,9 +5,9 @@ struct DeviceRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "display")
+            Image(systemName: device.isLikelyOpenDisplay ? "display" : "questionmark.circle")
                 .font(.title2)
-                .foregroundStyle(.blue)
+                .foregroundStyle(device.isLikelyOpenDisplay ? Color.blue : Color.secondary)
                 .frame(width: 36)
 
             VStack(alignment: .leading, spacing: 2) {

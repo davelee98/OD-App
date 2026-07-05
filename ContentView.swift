@@ -312,6 +312,16 @@ struct AddDisplaySheet: View {
 /// so it can be embedded (e.g. in `AddDisplaySheet`). Tapping a device connects it.
 struct DevicePickerContent: View {
     @EnvironmentObject private var ble: BLEManager
+    /// Persisted: a user whose display advertises a non-OD name needs this on every launch.
+    @AppStorage("showAllBLEDevices") private var showAllDevices = false
+
+    /// The manager stores every discovered peripheral; filtering happens here so flipping the
+    /// toggle never requires a rescan. With Show All on, likely-OD devices sort first (stable).
+    private var visibleDevices: [DiscoveredDevice] {
+        showAllDevices
+            ? ble.discoveredDevices.sorted { $0.isLikelyOpenDisplay && !$1.isLikelyOpenDisplay }
+            : ble.discoveredDevices.filter(\.isLikelyOpenDisplay)
+    }
 
     var body: some View {
         switch ble.bluetoothState {
@@ -330,25 +340,36 @@ struct DevicePickerContent: View {
 
     private var deviceList: some View {
         List {
-            if ble.discoveredDevices.isEmpty {
+            if visibleDevices.isEmpty {
                 HStack {
                     Spacer()
                     VStack(spacing: 12) {
                         if ble.isScanning { ProgressView() }
                         Text(ble.isScanning ? "Scanning for OpenDisplay devices…" : "No devices found")
                             .foregroundStyle(.secondary)
+                        if !showAllDevices && !ble.discoveredDevices.isEmpty {
+                            Text("\(ble.discoveredDevices.count) other device\(ble.discoveredDevices.count == 1 ? "" : "s") hidden")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                     .padding(.vertical, 32)
                     Spacer()
                 }
             } else {
                 Section("Discovered Devices") {
-                    ForEach(ble.discoveredDevices) { discovered in
+                    ForEach(visibleDevices) { discovered in
                         Button { ble.connect(discovered) } label: { DeviceRowView(device: discovered) }
                             .buttonStyle(.plain)
                             .disabled(discovered.connectionState == .connecting)
                     }
                 }
+            }
+
+            Section {
+                Toggle("Show all devices", isOn: $showAllDevices)
+            } footer: {
+                Text("Lists every nearby Bluetooth device, not just OpenDisplay displays.")
             }
         }
         .listStyle(.insetGrouped)
