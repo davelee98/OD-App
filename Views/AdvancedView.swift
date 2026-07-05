@@ -83,11 +83,41 @@ struct AdvancedView: View {
 /// Shared session log for diagnosing BLE activity across the app.
 struct BLELogView: View {
     @EnvironmentObject private var ble: BLEManager
+    @State private var filter: LogFilter = .all
 
     private var device: ODDevice? { ble.connectedDevice }
 
+    private enum LogFilter: String, CaseIterable, Identifiable {
+        case all = "All"
+        case sent = "Sent"
+        case received = "Received"
+        case system = "System"
+        var id: String { rawValue }
+
+        var direction: LogEntry.Direction? {
+            switch self {
+            case .all: nil
+            case .sent: .sent
+            case .received: .received
+            case .system: .system
+            }
+        }
+    }
+
+    private var filteredEntries: [LogEntry] {
+        guard let direction = filter.direction else { return ble.log }
+        return ble.log.filter { $0.direction == direction }
+    }
+
     var body: some View {
         List {
+            Section {
+                Picker("Filter", selection: $filter) {
+                    ForEach(LogFilter.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            }
+
             Section("BLE Log") {
                 if let error = device?.lastError {
                     Label(error, systemImage: "exclamationmark.triangle")
@@ -95,18 +125,23 @@ struct BLELogView: View {
                         .foregroundStyle(.red)
                 }
 
-                let entries = ble.log.suffix(50)
-                if entries.isEmpty {
-                    Text("No activity yet.")
+                // The full retained log (BLEManager caps it at 500), not a `.suffix(50)` —
+                // the Tester already showed everything, and hiding 450 entries here made the
+                // two surfaces disagree.
+                if filteredEntries.isEmpty {
+                    Text(ble.log.isEmpty ? "No activity yet." : "No entries match this filter.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(Array(entries)) { entry in
+                    ForEach(filteredEntries) { entry in
                         LogEntryRow(entry: entry)
                     }
                 }
 
                 if !ble.log.isEmpty {
+                    ShareLink(item: formattedLog, preview: SharePreview("BLE Log")) {
+                        Label("Share Log", systemImage: "square.and.arrow.up")
+                    }
                     Button(role: .destructive) {
                         ble.clearLog()
                     } label: {
@@ -117,5 +152,22 @@ struct BLELogView: View {
         }
         .navigationTitle("BLE Log")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// Plain-text export of the whole retained session log (unfiltered).
+    private var formattedLog: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss.SSS"
+        return ble.log.map { entry in
+            let direction = switch entry.direction {
+            case .sent: "→"
+            case .received: "←"
+            case .system: "•"
+            }
+            let label = entry.label ?? entry.commandName ?? ""
+            return [formatter.string(from: entry.timestamp), direction, label, entry.hexString]
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+        }.joined(separator: "\n")
     }
 }
