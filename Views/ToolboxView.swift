@@ -33,7 +33,10 @@ struct ToolboxView: View {
     @State private var isConfiguring = false
     @State private var configureProgress = 0.0
     @State private var statusLog: [StatusEntry] = []
-    @State private var suppressAdvancedModeOnConfigChange = false
+    /// Snapshot of the configuration as last read from / written to the device (or imported).
+    /// `hasUnsavedChanges` diffs the live `configuration` against it to gate destructive actions.
+    @State private var lastPersistedConfiguration: ToolboxConfiguration?
+    @State private var pendingDirtyAction: DirtyAction?
 
     // Cached JavaScriptCore-derived outputs. Recomputed only when `configuration` or the active
     // schema changes (see `recomputeDerivedConfiguration`), rather than on every body evaluation —
@@ -52,6 +55,16 @@ struct ToolboxView: View {
         let id: UUID
     }
 
+    /// Actions that discard the current packet edits in place; confirmed first when
+    /// `hasUnsavedChanges`. (Back navigation is deliberately not blocked — intercepting the
+    /// NavigationStack back button is fragile; these three are the in-view destroyers.)
+    private enum DirtyAction: String, Identifiable {
+        case importJSON = "Import JSON"
+        case resetPackets = "Reset Packet UI"
+        case reloadSchema = "Reload Bundled Schema"
+        var id: String { rawValue }
+    }
+
     var body: some View {
         Form {
             connectionSection
@@ -66,6 +79,7 @@ struct ToolboxView: View {
             if mode == .simple {
                 presetSection
                 hardwareSection
+                deepSleepSection
             } else {
                 packetEditorSection
                 packageBytesSection
@@ -97,18 +111,16 @@ struct ToolboxView: View {
         // on it alone silently drops the second "still failing" message. This handler only keeps
         // the picker/packet state in sync if the config changes for some other reason (e.g. a
         // read kicked off from another screen while reconnecting).
+        // A config change never switches the mode: "Read Toolbox" is only reachable from
+        // Advanced (the user is already there), a write updating `device.config` should stay
+        // wherever the user is, and a background read landing mid-Simple-setup used to yank
+        // the user into Advanced. `syncSimpleSelections()` keeps the Simple pickers current
+        // either way.
         .onChange(of: device?.config) { _, config in
             guard let config else { return }
             configuration = config.toolbox
+            lastPersistedConfiguration = config.toolbox
             syncSimpleSelections()
-            // A write (e.g. "Configure over Bluetooth") also updates `device.config` on success,
-            // but that shouldn't yank the user into Advanced mode — only an actual config *read*
-            // should.
-            if suppressAdvancedModeOnConfigChange {
-                suppressAdvancedModeOnConfigChange = false
-            } else {
-                mode = .advanced
-            }
         }
         // Catch-all for error sources that don't have their own completion-based status
         // reporting (authentication, MSD reads, misc `ble-common.js` runtime errors). Read/Write
@@ -138,6 +150,9 @@ struct ToolboxView: View {
         .onChange(of: boardID) { _, _ in applyBoardDefaults() }
         .onChange(of: mode) { _, newMode in
             if newMode == .advanced && configuration.packets.isEmpty { resetConfiguration() }
+            // Advanced-mode hand edits (hardware indexes, deep sleep, security) must be
+            // reflected when returning to the Simple pickers, or they show stale selections.
+            if newMode == .simple { syncSimpleSelections() }
         }
         .onChange(of: isLocked) { _, locked in
             if locked && encryptionKey.count != 32 { encryptionKey = randomKey() }
@@ -166,6 +181,17 @@ struct ToolboxView: View {
         .alert("Reboot device?", isPresented: $showRebootConfirm) {
             Button("Reboot", role: .destructive) { device?.reboot() }
             Button("Cancel", role: .cancel) { }
+        }
+        .confirmationDialog(
+            "Discard unsaved changes?",
+            isPresented: Binding(get: { pendingDirtyAction != nil },
+                                 set: { if !$0 { pendingDirtyAction = nil } }),
+            presenting: pendingDirtyAction
+        ) { action in
+            Button(action.rawValue, role: .destructive) { perform(action) }
+            Button("Cancel", role: .cancel) { }
+        } message: { _ in
+            Text("The current packet edits have not been written to the device or exported.")
         }
     }
 
@@ -237,6 +263,48 @@ struct ToolboxView: View {
             .equatable()
     }
 
+
+    /// Deep sleep was previously read from the device and written back, but had no control —
+    /// the value was silently whatever the last read left behind. Only ESP32-class boards
+    /// honor it (`build_simple` writes packet 4's deep_sleep_time_seconds only for
+    /// `installConfig.type == "esp32"`), so the picker is disabled for other boards.
+    private var deepSleepSection: some View {
+        Section {
+            Picker("Deep sleep", selection: $deepSleepMinutes) {
+                ForEach(deepSleepChoices, id: \.self) { minutes in
+                    Text(deepSleepLabel(minutes)).tag(minutes)
+                }
+            }
+            .disabled(!boardSupportsDeepSleep)
+        } footer: {
+            Text(boardSupportsDeepSleep
+                 ? "How long the device sleeps between wake-ups."
+                 : "Deep sleep applies only to ESP32-based boards.")
+        }
+    }
+
+    private var boardSupportsDeepSleep: Bool {
+        selectedBoard?.installConfig?.type == "esp32"
+    }
+
+    /// Standard presets, capped at the engine's 43200s (12h) clamp, plus the device's current
+    /// value if it isn't one of them — a Picker whose selection matches no tag renders blank.
+    private var deepSleepChoices: [Double] {
+        let standard: [Double] = [0, 5, 15, 30, 60, 360, 720]
+        guard standard.contains(deepSleepMinutes) else {
+            return (standard + [deepSleepMinutes]).sorted()
+        }
+        return standard
+    }
+
+    private func deepSleepLabel(_ minutes: Double) -> String {
+        if minutes <= 0 { return "Off" }
+        if minutes >= 60, minutes.truncatingRemainder(dividingBy: 60) == 0 {
+            let hours = Int(minutes / 60)
+            return hours == 1 ? "1 hour" : "\(hours) hours"
+        }
+        return "\(Int(minutes)) min"
+    }
 
     // MARK: - Advanced mode
 
@@ -318,12 +386,12 @@ struct ToolboxView: View {
 
     private var importExportSection: some View {
         Section {
-            Button { showImporter = true } label: { Label("Import JSON", systemImage: "square.and.arrow.down") }
+            Button { requestDirtyAction(.importJSON) } label: { Label("Import JSON", systemImage: "square.and.arrow.down") }
             Button(action: exportConfiguration) { Label("Export JSON", systemImage: "square.and.arrow.up") }
             if let url = shareURL {
                 ShareLink(item: url) { Label("Share Toolbox URL", systemImage: "link") }
             }
-            Button("Reset Packet UI", role: .destructive, action: resetConfiguration)
+            Button("Reset Packet UI", role: .destructive) { requestDirtyAction(.resetPackets) }
         } header: {
             Text("Import, Export & Share")
         }
@@ -334,13 +402,7 @@ struct ToolboxView: View {
             LabeledContent("Version", value: "\(schema.version).\(schema.minorVersion)")
             LabeledContent("Packet Types", value: "\(schema.packetTypes.count)")
             Button("Edit Schema") { showSchemaEditor = true }
-            Button("Reload Bundled Schema") {
-                do {
-                    schema = try ToolboxResources.resetSchema()
-                    schemaText = ToolboxResources.schemaText
-                    addLog("Bundled YAML schema reloaded", type: .success)
-                } catch { addLog(error.localizedDescription, type: .error) }
-            }
+            Button("Reload Bundled Schema") { requestDirtyAction(.reloadSchema) }
             Button("Download YAML") {
                 exportDocument = ToolboxJSONDocument(text: schemaText)
                 exportFilename = "config.yaml"
@@ -424,6 +486,12 @@ struct ToolboxView: View {
                     Label("Write Toolbox", systemImage: "arrow.up.circle")
                 }
                 .disabled(device == nil || configuration.packets.isEmpty || encodedConfiguration == nil)
+
+                if hasUnsavedChanges {
+                    Label("Edits not yet written to the device", systemImage: "pencil.circle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
 
             Button(role: .destructive) { showRebootConfirm = true } label: {
@@ -502,10 +570,37 @@ struct ToolboxView: View {
     private func loadDeviceConfiguration() {
         if let config = device?.config {
             configuration = config.toolbox
+            lastPersistedConfiguration = config.toolbox
             syncSimpleSelections()
         } else if let device {
             readConfiguration(from: device)
         }
+    }
+
+    private var hasUnsavedChanges: Bool {
+        guard let persisted = lastPersistedConfiguration else { return false }
+        return configuration != persisted
+    }
+
+    /// Runs `action` immediately when nothing would be lost, otherwise asks first.
+    private func requestDirtyAction(_ action: DirtyAction) {
+        if hasUnsavedChanges { pendingDirtyAction = action } else { perform(action) }
+    }
+
+    private func perform(_ action: DirtyAction) {
+        switch action {
+        case .importJSON: showImporter = true
+        case .resetPackets: resetConfiguration()
+        case .reloadSchema: reloadBundledSchema()
+        }
+    }
+
+    private func reloadBundledSchema() {
+        do {
+            schema = try ToolboxResources.resetSchema()
+            schemaText = ToolboxResources.schemaText
+            addLog("Bundled YAML schema reloaded", type: .success)
+        } catch { addLog(error.localizedDescription, type: .error) }
     }
 
     /// Reports a definitive status line for this specific read — success or failure — every
@@ -548,16 +643,22 @@ struct ToolboxView: View {
             return
         }
         ODLog.toolbox.info("writeConfiguration starting; appState=\(String(describing: device.connectionState), privacy: .public) rebootWhenDone=\(rebootWhenDone)")
+        // The cached encode refreshes via `.onChange(of: configuration)`, which has NOT run yet
+        // when this is called synchronously right after `buildSimpleConfiguration()` mutates
+        // `configuration` — without this, the guard below tests the *previous* configuration's
+        // encodability (wrongly blocking, or wrongly passing a now-invalid one).
+        recomputeDerivedConfiguration()
         guard encodedConfiguration != nil else {
             isConfiguring = false
             addLog("Configuration cannot be encoded", type: .error); return
         }
         if rebootWhenDone { configureProgress = 0.5 }
         if isLocked, let key = Data(hexString: encryptionKey) { device.psk = key }
-        suppressAdvancedModeOnConfigChange = true
-        device.writeConfig(ODConfigModel(toolbox: configuration)) { succeeded in
+        let written = configuration
+        device.writeConfig(ODConfigModel(toolbox: written)) { succeeded in
             addLog(succeeded ? "Configuration written successfully" : "Configuration write failed",
                    type: succeeded ? .success : .error)
+            if succeeded { lastPersistedConfiguration = written }
             if succeeded && rebootWhenDone {
                 configureProgress = 0.9
                 addLog("Rebooting device…", type: .info)
@@ -602,6 +703,7 @@ struct ToolboxView: View {
             defer { if accessing { url.stopAccessingSecurityScopedResource() } }
             let data = try Data(contentsOf: url)
             configuration = try JSONDecoder.toolbox.decode(ToolboxConfiguration.self, from: data)
+            lastPersistedConfiguration = configuration
             mode = .advanced
             syncSimpleSelections()
             addLog("Imported \(configuration.packets.count) packets", type: .success)
