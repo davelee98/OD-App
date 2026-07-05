@@ -9,7 +9,7 @@ struct BLETesterView: View {
     @State private var usePresetCommand = true
     @State private var customOpcodeHex = ""
     @State private var isSending = false
-    @State private var scrollToBottom = false
+    @State private var showClearConfirm = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,12 +18,32 @@ struct BLETesterView: View {
             logPanel
         }
         .navigationTitle("BLE Tester")
+        .confirmationDialog("Clear the shared BLE log?", isPresented: $showClearConfirm) {
+            Button("Clear Log", role: .destructive) { ble.clearLog() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This clears the app-wide log shown here and on the BLE Log screen.")
+        }
     }
 
     // MARK: - Command Panel
 
     private var commandPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // Failed sends only set `device.lastError`; without this banner they look like
+            // silent no-ops (only BLELogView surfaced the error before).
+            if let error = device.lastError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+            }
+            if device.connectionState != .connected {
+                Label("Disconnected — sending is disabled", systemImage: "bolt.slash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Picker("", selection: $usePresetCommand) {
                 Text("Preset Command").tag(true)
                 Text("Raw Opcode").tag(false)
@@ -58,6 +78,11 @@ struct BLETesterView: View {
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
             }
+            if !isPayloadValid {
+                Text("Payload must be hex bytes (e.g. 01 A0 FF).")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
 
             HStack {
                 Button(action: sendCommand) {
@@ -72,10 +97,10 @@ struct BLETesterView: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(isSending || !isInputValid)
+                .disabled(isSending || !isInputValid || device.connectionState != .connected)
 
                 Button {
-                    ble.clearLog()
+                    showClearConfirm = true
                 } label: {
                     Image(systemName: "trash")
                 }
@@ -112,23 +137,47 @@ struct BLETesterView: View {
 
     // MARK: - Actions
 
+    /// Strips the `0x` prefix, spaces, and surrounding whitespace so pasted values like
+    /// "0x0043 " or "01 A0 FF" parse. Shared by the opcode and payload fields.
+    private func cleanHex(_ raw: String) -> String {
+        raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "0x", with: "")
+            .replacingOccurrences(of: " ", with: "")
+    }
+
+    /// An unparseable payload used to be silently dropped, sending the bare header — the
+    /// device got a different packet than the user typed. Empty is fine; malformed is not.
+    private var isPayloadValid: Bool {
+        let clean = cleanHex(payloadHex)
+        return clean.isEmpty || Data(hexString: clean) != nil
+    }
+
+    private var isOpcodeValid: Bool {
+        let clean = cleanHex(customOpcodeHex)
+        return !clean.isEmpty && Data(hexString: clean) != nil
+    }
+
     private var isInputValid: Bool {
-        if usePresetCommand { return true }
-        guard !customOpcodeHex.isEmpty else { return false }
-        let clean = customOpcodeHex.replacingOccurrences(of: "0x", with: "")
-        return Data(hexString: clean) != nil
+        (usePresetCommand || isOpcodeValid) && isPayloadValid
+    }
+
+    private func parsedPayload() -> Data? {
+        let clean = cleanHex(payloadHex)
+        guard !clean.isEmpty else { return nil }
+        return Data(hexString: clean)
     }
 
     private func sendCommand() {
+        guard isInputValid else { return }
+        let payload = parsedPayload()
         let packet: Data
         if usePresetCommand {
             var data = selectedCommand.header
-            if let payload = Data(hexString: payloadHex) { data.append(payload) }
+            if let payload { data.append(payload) }
             packet = data
         } else {
-            let clean = customOpcodeHex.replacingOccurrences(of: "0x", with: "")
-            guard var data = Data(hexString: clean) else { return }
-            if let payload = Data(hexString: payloadHex) { data.append(payload) }
+            guard var data = Data(hexString: cleanHex(customOpcodeHex)) else { return }
+            if let payload { data.append(payload) }
             packet = data
         }
 
