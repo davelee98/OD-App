@@ -2,7 +2,7 @@ import Foundation
 import CoreBluetooth
 
 enum AppInfo {
-    static let version = "1.0"
+    static let version = "0.1.4"
 }
 
 enum OD {
