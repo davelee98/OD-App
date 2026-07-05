@@ -17,8 +17,18 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var config: ODConfigModel?
     @Published var configReadProgress: Double = 0
     @Published var lastError: String?
+
+    /// The lifecycle of an image send, driving the Composer's status overlay. This is the single
+    /// source of truth — `isUploading` is derived from it, so there is exactly one writer.
+    enum UploadPhase: Equatable { case idle, sending, succeeded, failed(String) }
+
+    @Published var uploadPhase: UploadPhase = .idle
+    @Published var uploadStatus: String?          // human-readable line forwarded from ble-common.js
     @Published var uploadProgress: Double = 0
-    @Published var isUploading = false
+    @Published var uploadByteCount: Int?          // packed image payload size, for the terminal summary
+    @Published var uploadElapsed: TimeInterval?   // wall-clock duration of the send (set at terminal)
+    private var uploadStartTime: Date?            // non-published; captured when the send begins
+    var isUploading: Bool { uploadPhase == .sending }
 
     var name: String { peripheral.name ?? peripheral.identifier.uuidString }
     var deviceID: String { peripheral.identifier.uuidString }
@@ -115,7 +125,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         runtime?.setConnected(false)
         connectionState = .disconnected
         isAuthenticated = false
-        isUploading = false
+        if uploadPhase == .sending { failUpload("The display disconnected during upload.") }
         uploadWatchdog?.cancel()
         uploadWatchdog = nil
     }
@@ -427,7 +437,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     // MARK: - Image upload
 
     func uploadImage(pixelData: Data, compressed: Bool = true) {
-        guard !isUploading else { return }
+        guard uploadPhase != .sending else { return }
         if let config {
             let expected = ImageProcessor.expectedPackedByteCount(
                 width: config.displayWidth,
@@ -436,12 +446,16 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             )
             ODLog.imaging.debug("packed image colorScheme=\(config.colorScheme) bytes=\(pixelData.count) expected=\(expected)")
             guard pixelData.count == expected else {
-                lastError = "Packed image has \(pixelData.count) bytes; color scheme \(config.colorScheme) requires \(expected)"
+                failUpload("Packed image has \(pixelData.count) bytes; color scheme \(config.colorScheme) requires \(expected)")
                 return
             }
         }
-        isUploading = true
+        uploadByteCount = pixelData.count
+        uploadStartTime = Date()
+        uploadElapsed = nil
+        uploadStatus = nil
         uploadProgress = 0
+        uploadPhase = .sending
         let modes = config?.transmissionModes ?? 0
 
         let arguments: [String: Any] = [
@@ -455,11 +469,44 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             guard let self else { return }
             self.uploadWatchdog?.cancel()
             self.uploadWatchdog = nil
-            self.isUploading = false
             switch result {
-            case .success: self.uploadProgress = 1
-            case .failure(let error): self.lastError = error.localizedDescription
+            case .success:
+                self.uploadProgress = 1
+                self.finishUploadTiming()
+                self.uploadPhase = .succeeded
+            case .failure(let error):
+                self.failUpload(error.localizedDescription)
             }
+        }
+    }
+
+    /// Records the send duration from `uploadStartTime`. Called at every terminal transition so the
+    /// elapsed time is available on failures too (the JS success-timing message never fires then).
+    private func finishUploadTiming() {
+        uploadElapsed = uploadStartTime.map { Date().timeIntervalSince($0) }
+        uploadStartTime = nil
+    }
+
+    /// Moves the send into the `.failed` state, capturing timing and mirroring the reason to
+    /// `lastError` (which other surfaces still read). Also used by the Composer to surface
+    /// pre-upload failures (missing config, render error) in the same status overlay.
+    func failUpload(_ reason: String) {
+        lastError = reason
+        finishUploadTiming()
+        uploadPhase = .failed(reason)
+    }
+
+    /// Dismisses a terminal (`.succeeded`/`.failed`) status back to idle. No-op while sending.
+    func acknowledgeUploadOutcome() {
+        switch uploadPhase {
+        case .succeeded, .failed:
+            uploadPhase = .idle
+            uploadStatus = nil
+            uploadProgress = 0
+            uploadElapsed = nil
+            uploadByteCount = nil
+        case .idle, .sending:
+            break
         }
     }
 
@@ -476,9 +523,8 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             self.trace("uploadImage STALL WATCHDOG: no progress 30s; " +
                        "progress=\(self.uploadProgress), appState=\(self.connectionState), " +
                        "peripheralState=\(self.peripheral.state.rawValue)", level: .error)
-            self.lastError = "Image upload timed out. The device stopped responding."
-            self.isUploading = false
             self.uploadProgress = 0
+            self.failUpload("Image upload timed out. The display stopped responding.")
         }
         uploadWatchdog = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: work)
@@ -506,15 +552,19 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     private func handleRuntimeEvent(type: String, payload: [String: Any]) {
         switch type {
         case "error":
-            lastError = payload["message"] as? String ?? "Unknown ble-common.js error"
+            let message = payload["message"] as? String ?? "Unknown ble-common.js error"
+            // A runtime error mid-send is an upload failure — surface it in the status overlay.
+            if uploadPhase == .sending { failUpload(message) } else { lastError = message }
         case "log":
             if let message = payload["message"] as? String { ODLog.proto.debug("\(message, privacy: .public)") }
+        case "uploadStatus":
+            uploadStatus = payload["message"] as? String
         case "uploadProgress":
             let progress = (payload["progress"] as? NSNumber)?.doubleValue ?? 0
             let total = max(1, (payload["total"] as? NSNumber)?.doubleValue ?? 1)
             uploadProgress = min(1, progress / total)
             // Forward progress resets the stall window so a slow-but-advancing upload isn't killed.
-            if isUploading { armUploadWatchdog() }
+            if uploadPhase == .sending { armUploadWatchdog() }
         case "configProgress":
             let received = (payload["received"] as? NSNumber)?.doubleValue ?? 0
             let total = max(1, (payload["total"] as? NSNumber)?.doubleValue ?? 1)

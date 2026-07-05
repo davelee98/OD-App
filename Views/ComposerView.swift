@@ -160,10 +160,15 @@ struct ComposerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { sendToolbarButton }
         .overlay { if isWaitingForConnection { connectionOverlay } }
+        .modifier(UploadStatusPresenter(phase: device?.uploadPhase, overlay: uploadStatusOverlay,
+                                        onAutoDismiss: autoDismissUploadOutcome))
         .onAppear {
             ensureConnection()
         }
-        .onDisappear { connectionTimeoutTask?.cancel() }
+        .onDisappear {
+            connectionTimeoutTask?.cancel()
+            device?.acknowledgeUploadOutcome()
+        }
         .onChange(of: photoItem) { _, item in loadPhoto(item) }
         .onChange(of: adjustments) { _, _ in refreshCanvasImage() }
         .onChange(of: activeTool) { _, _ in selection = nil }
@@ -267,18 +272,6 @@ struct ComposerView: View {
         )
         .padding(.horizontal)
         .padding(.top, 8)
-        .overlay { if let device, device.isUploading { uploadOverlay(device) } }
-    }
-
-    private func uploadOverlay(_ device: ODDevice) -> some View {
-        ZStack {
-            Color.black.opacity(0.4)
-            VStack(spacing: 12) {
-                ProgressView(value: device.uploadProgress).progressViewStyle(.linear).tint(.white).frame(width: 200)
-                Text("Sending… \(Int(device.uploadProgress * 100))%").foregroundStyle(.white).font(.caption)
-            }
-        }
-        .allowsHitTesting(true)
     }
 
     private var connectionOverlay: some View {
@@ -293,6 +286,41 @@ struct ComposerView: View {
         }
         .ignoresSafeArea(edges: .bottom)
         .allowsHitTesting(true)
+    }
+
+    /// Full-screen send status: progress → success → error, shown whenever a send is in flight or
+    /// just finished. Mutually exclusive with `connectionOverlay` (sending requires a connection).
+    @ViewBuilder
+    private var uploadStatusOverlay: some View {
+        if let device, device.uploadPhase != .idle {
+            UploadStatusOverlay(
+                phase: device.uploadPhase,
+                progress: device.uploadProgress,
+                status: device.uploadStatus,
+                deviceName: entity.friendlyName,
+                elapsed: device.uploadElapsed,
+                byteCount: device.uploadByteCount,
+                onDismiss: { device.acknowledgeUploadOutcome() },
+                onRetry: { device.acknowledgeUploadOutcome(); sendPhoto() }
+            )
+            .transition(.opacity)
+        }
+    }
+
+    /// Auto-dismisses a terminal send status: success after ~2s, error after ~6s (or the user taps
+    /// Dismiss/Retry sooner). Bound to `.task(id: device?.uploadPhase)` so it cancels/restarts on
+    /// each phase change.
+    private func autoDismissUploadOutcome() async {
+        guard let device else { return }
+        let delay: Duration
+        switch device.uploadPhase {
+        case .succeeded: delay = .seconds(2)
+        case .failed:    delay = .seconds(6)
+        case .idle, .sending: return
+        }
+        try? await Task.sleep(for: delay)
+        guard !Task.isCancelled else { return }
+        device.acknowledgeUploadOutcome()
     }
 
     /// Always-visible actions directly under the canvas, independent of the selected tool.
@@ -1046,7 +1074,7 @@ struct ComposerView: View {
     private func sendPhoto() {
         guard let device else { return }
         guard let deviceConfig = device.config else {
-            device.lastError = "Waiting for a valid device configuration before encoding the image"
+            device.failUpload("Waiting for a valid device configuration before encoding the image.")
             device.readConfig()
             return
         }
@@ -1061,7 +1089,7 @@ struct ComposerView: View {
                                                       colorScheme: scheme, dithering: dith,
                                                       useMeasuredPalette: measured, toneCompression: tone) else {
                 DispatchQueue.main.async {
-                    device.lastError = "Could not render the image for this display's color scheme."
+                    device.failUpload("Could not render the image for this display's color scheme.")
                 }
                 return
             }
@@ -1127,4 +1155,139 @@ struct ComposerView: View {
             }
         }
     }
+}
+
+// MARK: - Upload status overlay
+
+/// Bundles the send-status overlay, its transition animation, terminal-state auto-dismiss, and
+/// success/error haptics into one modifier — keeping the (already large) Composer `body` modifier
+/// chain short enough for the Swift type-checker.
+private struct UploadStatusPresenter<Overlay: View>: ViewModifier {
+    let phase: ODDevice.UploadPhase?
+    let overlay: Overlay
+    let onAutoDismiss: () async -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .overlay { overlay }
+            .animation(.easeInOut(duration: 0.25), value: phase)
+            .task(id: phase) { await onAutoDismiss() }
+            .sensoryFeedback(trigger: phase) { _, newPhase in
+                switch newPhase {
+                case .succeeded?: return .success
+                case .failed?:    return .error
+                default:          return nil
+                }
+            }
+    }
+}
+
+/// Prominent, full-screen send-status overlay: an in-progress state (device name, big percentage,
+/// determinate bar, live status line) plus terminal success/error states that report elapsed time
+/// and bytes transferred. Value-typed so it previews without a live `ODDevice`.
+struct UploadStatusOverlay: View {
+    let phase: ODDevice.UploadPhase
+    let progress: Double
+    let status: String?
+    let deviceName: String
+    let elapsed: TimeInterval?
+    let byteCount: Int?
+    var onDismiss: () -> Void
+    var onRetry: () -> Void
+
+    /// "2.3s · 45.2 KB" — whichever parts are available.
+    private var summary: String {
+        var parts: [String] = []
+        if let elapsed { parts.append(String(format: "%.1fs", elapsed)) }
+        if let byteCount {
+            parts.append(ByteCountFormatter.string(fromByteCount: Int64(byteCount), countStyle: .file))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(.regularMaterial)
+            VStack(spacing: 20) {
+                switch phase {
+                case .sending:
+                    Text(deviceName).font(.headline)
+                    Text("\(Int(progress * 100))%")
+                        .font(.system(size: 56, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                    if progress <= 0 && status == nil {
+                        ProgressView().progressViewStyle(.circular)
+                    } else {
+                        ProgressView(value: progress)
+                            .progressViewStyle(.linear)
+                            .tint(.accentColor)
+                            .frame(maxWidth: 260)
+                    }
+                    Text(status ?? "Preparing…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+
+                case .succeeded:
+                    Label("Sent", systemImage: "checkmark.circle.fill")
+                        .font(.title2.bold())
+                        .foregroundStyle(.green)
+                    Text(deviceName).font(.subheadline).foregroundStyle(.secondary)
+                    if !summary.isEmpty {
+                        Text(summary).font(.footnote).monospacedDigit().foregroundStyle(.secondary)
+                    }
+
+                case .failed(let reason):
+                    Label("Send failed", systemImage: "exclamationmark.triangle.fill")
+                        .font(.title2.bold())
+                        .foregroundStyle(.red)
+                    Text(reason)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                    if !summary.isEmpty {
+                        Text(summary).font(.footnote).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    HStack(spacing: 12) {
+                        Button("Dismiss") { onDismiss() }
+                            .buttonStyle(.bordered)
+                        Button("Retry") { onRetry() }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .padding(.top, 4)
+
+                case .idle:
+                    EmptyView()
+                }
+            }
+            .padding(32)
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(true)
+    }
+}
+
+#Preview("Sending") {
+    UploadStatusOverlay(phase: .sending, progress: 0.45,
+                        status: "Uploading: 45% (123/456 chunks)", deviceName: "Desk EPD",
+                        elapsed: nil, byteCount: 46280, onDismiss: {}, onRetry: {})
+}
+
+#Preview("Refreshing") {
+    UploadStatusOverlay(phase: .sending, progress: 1.0,
+                        status: "Upload complete (2.3s), refreshing display…", deviceName: "Desk EPD",
+                        elapsed: nil, byteCount: 46280, onDismiss: {}, onRetry: {})
+}
+
+#Preview("Sent") {
+    UploadStatusOverlay(phase: .succeeded, progress: 1, status: nil, deviceName: "Desk EPD",
+                        elapsed: 2.3, byteCount: 46280, onDismiss: {}, onRetry: {})
+}
+
+#Preview("Failed") {
+    UploadStatusOverlay(phase: .failed("Image upload timed out. The display stopped responding."),
+                        progress: 0.62, status: nil, deviceName: "Desk EPD",
+                        elapsed: 12.0, byteCount: 46280, onDismiss: {}, onRetry: {})
 }
