@@ -20,7 +20,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     /// The lifecycle of an image send, driving the Composer's status overlay. This is the single
     /// source of truth — `isUploading` is derived from it, so there is exactly one writer.
-    enum UploadPhase: Equatable { case idle, sending, succeeded, failed(String) }
+    enum UploadPhase: Equatable { case idle, preparing, sending, succeeded, failed(String) }
 
     @Published var uploadPhase: UploadPhase = .idle
     @Published var uploadStatus: String?          // human-readable line forwarded from ble-common.js
@@ -28,7 +28,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var uploadByteCount: Int?          // packed image payload size, for the terminal summary
     @Published var uploadElapsed: TimeInterval?   // wall-clock duration of the send (set at terminal)
     private var uploadStartTime: Date?            // non-published; captured when the send begins
-    var isUploading: Bool { uploadPhase == .sending }
+    var isUploading: Bool { uploadPhase == .sending || uploadPhase == .preparing }
 
     var name: String { peripheral.name ?? peripheral.identifier.uuidString }
     var deviceID: String { peripheral.identifier.uuidString }
@@ -514,6 +514,19 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - Image upload
 
+    /// Show the send overlay the instant Send is tapped, before the (possibly slow) full-resolution
+    /// render + dithering pass. The composer does that work off the main thread and then calls
+    /// `uploadImage`, which advances `.preparing → .sending`.
+    func beginUpload() {
+        guard !isUploading else { return }
+        uploadByteCount = nil
+        uploadStartTime = nil
+        uploadElapsed = nil
+        uploadStatus = nil
+        uploadProgress = 0
+        uploadPhase = .preparing
+    }
+
     func uploadImage(pixelData: Data, compressed: Bool = true) {
         guard uploadPhase != .sending else { return }
         if let config {
@@ -600,7 +613,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             uploadProgress = 0
             uploadElapsed = nil
             uploadByteCount = nil
-        case .idle, .sending:
+        case .idle, .preparing, .sending:
             break
         }
     }

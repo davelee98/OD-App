@@ -156,6 +156,41 @@ enum ImageProcessor {
         return uiImage(from: pixels, width: width, height: height)
     }
 
+    /// Runs the dithering pipeline **once** and returns both the packed wire bytes (for upload) and a
+    /// dithered UIImage (for on-screen preview) — so the Composer can show what the panel will display
+    /// without paying for the dither twice. Equivalent to calling `process` and `preview` back to back.
+    static func processWithPreview(image: UIImage, width: Int, height: Int,
+                                   colorScheme: UInt8, dithering: DitheringMode,
+                                   useMeasuredPalette: Bool = false, toneCompression: Double = 0)
+        -> (packed: Data, preview: UIImage)? {
+        guard let cgImage = image.cgImage else { return nil }
+        let palette = (useMeasuredPalette ? measuredPalettes[colorScheme] : nil)
+                    ?? palettes[colorScheme] ?? palettes[0]!
+
+        var pixels = rgbaPixels(from: cgImage, width: width, height: height)
+        guard !pixels.isEmpty else { return nil }
+
+        var floatPixels = toFloat(pixels, count: width * height)
+        if useMeasuredPalette {
+            compressDynamicRange(&floatPixels, colorScheme: colorScheme, strength: toneCompression)
+        }
+        applyDithering(&floatPixels, width: width, height: height, palette: palette, mode: dithering)
+        let indexed = quantize(floatPixels, palette: palette)
+
+        let packed = pack(indexed, scheme: colorScheme, width: width, height: height)
+
+        // Map indices back to palette RGB for the preview image.
+        for i in 0..<(width * height) {
+            let (r, g, b) = palette[indexed[i]]
+            pixels[i * 4 + 0] = UInt8(r)
+            pixels[i * 4 + 1] = UInt8(g)
+            pixels[i * 4 + 2] = UInt8(b)
+            pixels[i * 4 + 3] = 255
+        }
+        guard let preview = uiImage(from: pixels, width: width, height: height) else { return nil }
+        return (packed, preview)
+    }
+
     // MARK: - Adjustments (Core Image)
 
     private static let ciContext = CIContext(options: nil)

@@ -105,6 +105,11 @@ struct ComposerView: View {
     @State private var previewImage: UIImage?
     @State private var showPreview = false
 
+    // Send overlay imagery: the full-color composite shows immediately, then the dithered panel
+    // preview is revealed left→right in lockstep with upload progress.
+    @State private var sendCompositeImage: UIImage?
+    @State private var sendDitheredImage: UIImage?
+
     // Connection gate.
     @State private var isWaitingForConnection = false
     @State private var hasPhysicalConnection = false
@@ -300,6 +305,8 @@ struct ComposerView: View {
                 deviceName: entity.friendlyName,
                 elapsed: device.uploadElapsed,
                 byteCount: device.uploadByteCount,
+                compositeImage: sendCompositeImage,
+                ditheredImage: sendDitheredImage,
                 onDismiss: { device.acknowledgeUploadOutcome() },
                 onRetry: { device.acknowledgeUploadOutcome(); sendPhoto() }
             )
@@ -316,7 +323,7 @@ struct ComposerView: View {
         switch device.uploadPhase {
         case .succeeded: delay = .seconds(2)
         case .failed:    delay = .seconds(6)
-        case .idle, .sending: return
+        case .idle, .preparing, .sending: return
         }
         try? await Task.sleep(for: delay)
         guard !Task.isCancelled else { return }
@@ -1055,7 +1062,6 @@ struct ComposerView: View {
         refreshCanvasImage()
         showPreview = true
         previewImage = nil
-        let composite = renderComposite()
         // Read the scheme from the connected device at render time. The config can arrive after this
         // view appears; using the initial @State value would encode a 1bpp frame for a 4-gray panel.
         let w = displayWidth, h = displayHeight
@@ -1063,7 +1069,9 @@ struct ComposerView: View {
         let dith = dithering
         let measured = useMeasuredPalette
         let tone = Double(adjustments.toneCompression)
+        let snapshot = compositeSnapshot()
         DispatchQueue.global(qos: .userInitiated).async {
+            let composite = Self.renderComposite(snapshot)
             let preview = ImageProcessor.preview(image: composite, width: w, height: h,
                                                  colorScheme: scheme, dithering: dith,
                                                  useMeasuredPalette: measured, toneCompression: tone)
@@ -1078,30 +1086,63 @@ struct ComposerView: View {
             device.readConfig()
             return
         }
-        let composite = renderComposite()
+        // Show the sending overlay immediately, then do the (possibly slow) full-resolution render
+        // and dithering pass off the main thread — otherwise the tap appears to hang for a beat
+        // while the composite is rasterized before any status UI can appear.
+        device.beginUpload()
+        sendCompositeImage = nil   // drop any prior send's imagery before the new one renders
+        sendDitheredImage = nil
         let w = displayWidth, h = displayHeight
         let scheme = deviceConfig.colorScheme
         let dith = dithering
         let measured = useMeasuredPalette
         let tone = Double(adjustments.toneCompression)
+        let snapshot = compositeSnapshot()   // capture @State on the main thread
         DispatchQueue.global(qos: .userInitiated).async {
-            guard let pixels = ImageProcessor.process(image: composite, width: w, height: h,
-                                                      colorScheme: scheme, dithering: dith,
-                                                      useMeasuredPalette: measured, toneCompression: tone) else {
+            let composite = Self.renderComposite(snapshot)
+            // Surface the full-color composite the moment it's rasterized, before the dither runs.
+            DispatchQueue.main.async { sendCompositeImage = composite }
+            guard let result = ImageProcessor.processWithPreview(image: composite, width: w, height: h,
+                                                                colorScheme: scheme, dithering: dith,
+                                                                useMeasuredPalette: measured, toneCompression: tone) else {
                 DispatchQueue.main.async {
                     device.failUpload("Could not render the image for this display's color scheme.")
                 }
                 return
             }
-            DispatchQueue.main.async { device.uploadImage(pixelData: pixels, compressed: true) }
+            DispatchQueue.main.async {
+                sendDitheredImage = result.preview
+                device.uploadImage(pixelData: result.packed, compressed: true)
+            }
         }
     }
 
-    /// Render the cropped, adjusted photo plus annotations at the panel's native
-    /// resolution — the exact bitmap handed to `ImageProcessor.process` → JS compression → BLE upload.
-    private func renderComposite() -> UIImage {
-        let w = displayWidth, h = displayHeight
-        let box = canvasSize.width > 0 ? canvasSize : CGSize(width: w, height: h)
+    /// All canvas inputs needed to rasterize the composite, captured as value types so the render
+    /// can run off the main thread without touching SwiftUI `@State`.
+    private struct CompositeSnapshot {
+        let width: Int, height: Int
+        let canvasSize: CGSize
+        let baseImage: UIImage?
+        let adjustments: ImageAdjustments
+        let scale: CGFloat
+        let pan: CGSize
+        let strokes: [Stroke]
+        let textItems: [TextItem]
+        let qrItems: [QRItem]
+    }
+
+    private func compositeSnapshot() -> CompositeSnapshot {
+        CompositeSnapshot(width: displayWidth, height: displayHeight, canvasSize: canvasSize,
+                          baseImage: baseImage, adjustments: adjustments, scale: scale, pan: pan,
+                          strokes: strokes, textItems: textItems, qrItems: qrItems)
+    }
+
+    /// Render the cropped, adjusted photo plus annotations at the panel's native resolution — the
+    /// exact bitmap handed to `ImageProcessor.process` → JS compression → BLE upload. Pure over its
+    /// snapshot so it can run off the main thread (see `compositeSnapshot`).
+    private static func renderComposite(_ s: CompositeSnapshot) -> UIImage {
+        let w = s.width, h = s.height
+        let box = s.canvasSize.width > 0 ? s.canvasSize : CGSize(width: w, height: h)
         let k = CGFloat(w) / box.width   // canvas points → panel pixels (aspect matches)
 
         return UIGraphicsImageRenderer(size: CGSize(width: w, height: h)).image { rendererCtx in
@@ -1109,23 +1150,23 @@ struct ComposerView: View {
             UIRectFill(CGRect(x: 0, y: 0, width: w, height: h))
 
             // Photo: same aspect-fill + zoom + pan transform used on screen, scaled to pixels.
-            if let base = baseImage {
-                let img = ImageProcessor.adjust(base, adjustments: adjustments)
+            if let base = s.baseImage {
+                let img = ImageProcessor.adjust(base, adjustments: s.adjustments)
                 let imgSize = img.size
                 if imgSize.width > 0, imgSize.height > 0 {
                     let s0 = max(box.width / imgSize.width, box.height / imgSize.height)
-                    let s = s0 * scale
-                    let drawW = imgSize.width * s
-                    let drawH = imgSize.height * s
-                    let x = (box.width - drawW) / 2 + pan.width
-                    let y = (box.height - drawH) / 2 + pan.height
+                    let scl = s0 * s.scale
+                    let drawW = imgSize.width * scl
+                    let drawH = imgSize.height * scl
+                    let x = (box.width - drawW) / 2 + s.pan.width
+                    let y = (box.height - drawH) / 2 + s.pan.height
                     img.draw(in: CGRect(x: x * k, y: y * k, width: drawW * k, height: drawH * k))
                 }
             }
 
             let ctx = rendererCtx.cgContext
             ctx.setLineCap(.round); ctx.setLineJoin(.round)
-            for stroke in strokes {
+            for stroke in s.strokes {
                 guard stroke.points.count > 1 else { continue }
                 UIColor(stroke.color).setStroke()
                 ctx.setLineWidth(stroke.lineWidth * k)
@@ -1135,7 +1176,7 @@ struct ComposerView: View {
                 ctx.strokePath()
             }
 
-            for item in textItems {
+            for item in s.textItems {
                 let attrs: [NSAttributedString.Key: Any] = [
                     .font: UIFont.systemFont(ofSize: item.fontSize * k),
                     .foregroundColor: UIColor(item.color)
@@ -1146,7 +1187,7 @@ struct ComposerView: View {
                                      y: item.position.y * k - sz.height / 2))
             }
 
-            for item in qrItems {
+            for item in s.qrItems {
                 guard let qrImg = odGenerateQR(content: item.content, size: item.size * k, color: item.color) else { continue }
                 let side = item.size * k
                 qrImg.draw(in: CGRect(x: item.position.x * k - side / 2,
@@ -1192,6 +1233,8 @@ struct UploadStatusOverlay: View {
     let deviceName: String
     let elapsed: TimeInterval?
     let byteCount: Int?
+    var compositeImage: UIImage? = nil
+    var ditheredImage: UIImage? = nil
     var onDismiss: () -> Void
     var onRetry: () -> Void
 
@@ -1205,24 +1248,49 @@ struct UploadStatusOverlay: View {
         return parts.joined(separator: " · ")
     }
 
+    /// The image being sent: the full-color composite, with the dithered panel result revealed
+    /// left→right in lockstep with `progress`. Shown across every non-idle phase once rendered.
+    @ViewBuilder
+    private var heroImage: some View {
+        if let compositeImage {
+            let aspect = compositeImage.size.width / max(compositeImage.size.height, 1)
+            ZStack(alignment: .leading) {
+                Image(uiImage: compositeImage)
+                    .resizable().interpolation(.none)
+                if let ditheredImage {
+                    Image(uiImage: ditheredImage)
+                        .resizable().interpolation(.none)
+                        .mask(alignment: .leading) {
+                            GeometryReader { geo in
+                                Rectangle().frame(width: geo.size.width * min(max(progress, 0), 1))
+                            }
+                        }
+                }
+            }
+            // Fill the available space at the target panel's aspect ratio — largest dimension
+            // spans the screen in both portrait and landscape, rather than a fixed thumbnail.
+            .aspectRatio(aspect, contentMode: .fit)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .animation(.easeInOut(duration: 0.3), value: progress)
+        }
+    }
+
     var body: some View {
         ZStack {
             Rectangle().fill(.regularMaterial)
             VStack(spacing: 20) {
+                heroImage
                 switch phase {
-                case .sending:
+                case .preparing, .sending:
                     Text(deviceName).font(.headline)
                     Text("\(Int(progress * 100))%")
                         .font(.system(size: 56, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .contentTransition(.numericText())
-                    if progress <= 0 && status == nil {
+                    // The image reveal is the progress bar; keep a spinner only until it appears.
+                    if compositeImage == nil {
                         ProgressView().progressViewStyle(.circular)
-                    } else {
-                        ProgressView(value: progress)
-                            .progressViewStyle(.linear)
-                            .tint(.accentColor)
-                            .frame(maxWidth: 260)
                     }
                     Text(status ?? "Preparing…")
                         .font(.subheadline)
