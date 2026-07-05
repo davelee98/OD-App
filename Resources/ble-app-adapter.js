@@ -55,7 +55,15 @@
     if (ble.directWriteState && ble.directWriteState.active) throw new Error('Direct write already in progress');
     const raw = global.__odHexToBytes(args.rawHex || '');
     const transmissionModes = Number(args.transmissionModes || 0);
-    const supportsCompression = (transmissionModes & 0x03) === 0x03;
+    // Mirror opendisplay.org's ble-common.js gate: bit0 (streaming decompression) is the
+    // authoritative "can inflate a stream" flag, and it forces the zip bit on. Net effect —
+    // compress iff bit0 is set. (Keep line-for-line with the shared engine's direct-write path.)
+    const TRANSMISSION_MODE_STREAMING_DECOMPRESSION = 0x01;
+    const TRANSMISSION_MODE_ZIP = 0x02;
+    let supportsZip = (transmissionModes & TRANSMISSION_MODE_ZIP) !== 0;
+    const supportsStreamingDecompression = (transmissionModes & TRANSMISSION_MODE_STREAMING_DECOMPRESSION) !== 0;
+    if (supportsStreamingDecompression) supportsZip = true;
+    const supportsCompression = supportsZip && supportsStreamingDecompression;
     let compressed = null;
     if (args.compress !== false && supportsCompression && global.pako && global.pako.deflate) {
       compressed = global.pako.deflate(raw, { level: 9, windowBits: 9 });
