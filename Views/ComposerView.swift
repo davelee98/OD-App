@@ -60,6 +60,11 @@ struct ComposerView: View {
     @State private var canvasRenderToken = 0    // drops stale async adjustment results from a fast slider drag
     @State private var pan: CGSize = .zero
     @State private var scale: CGFloat = 1
+    /// Bumped whenever `pan`/`scale` are force-reset from outside a gesture (new photo, Reset
+    /// button, full page reset) — tells `DisplayCanvasView` to also drop its internal gesture
+    /// baselines (`basePan`/`baseScale`), which otherwise stay stale and make the *next* drag or
+    /// pinch jump using an outdated reference point.
+    @State private var transformResetToken = 0
 
     // Annotations.
     @State private var activeTool: ComposerTool = .photo
@@ -242,7 +247,7 @@ struct ComposerView: View {
             displaySize: displaySize,
             palette: schemePaletteColors,
             mode: mode,
-            pan: $pan, scale: $scale,
+            pan: $pan, scale: $scale, transformResetToken: transformResetToken,
             strokes: $strokes, textItems: $textItems, qrItems: $qrItems,
             canvasSize: $canvasSize,
             selection: $selection,
@@ -378,9 +383,9 @@ struct ComposerView: View {
                 Label("Pinch to zoom · drag to reposition", systemImage: "hand.draw")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Reset") { pan = .zero; scale = 1 }
+                Button("Reset") { resetToOriginalState() }
                     .font(.caption).buttonStyle(.bordered)
-                    .disabled(pan == .zero && scale == 1)
+                    .disabled(isAtOriginalState)
             }
         }
     }
@@ -831,6 +836,28 @@ struct ComposerView: View {
         resetAnnotationColors()
     }
 
+    /// Whether the photo's transform and processing settings already match what they'd be right
+    /// after opening the Composer — i.e. nothing left for the Photo panel's "Reset" to undo.
+    /// Deliberately excludes the photo itself and annotations, which are `resetPage()`'s job.
+    private var isAtOriginalState: Bool {
+        pan == .zero && scale == 1 && adjustments.isNeutral && !useMeasuredPalette && !ditheringOverridden
+    }
+
+    /// Restores the photo transform and processing settings (crop, adjustments, tone compression,
+    /// measured-palette toggle, dithering) to what they were before the user touched anything this
+    /// session — the smart dithering default for the current scheme, same as on first load. Leaves
+    /// the chosen photo and annotations untouched (that's the separate, destructive "Reset Page").
+    private func resetToOriginalState() {
+        pan = .zero; scale = 1
+        transformResetToken &+= 1
+        adjustments = .neutral
+        useMeasuredPalette = false
+        ditheringOverridden = false
+        dithering = Self.smartDithering(for: colorScheme)
+        // `adjustments`/`useMeasuredPalette` each already drive `refreshCanvasImage()` via their
+        // own `.onChange`; dithering/pan/scale don't affect `canvasImage` so need no extra refresh.
+    }
+
     private func resetAnnotationColors() {
         drawColorIndex = 0; textColorIndex = 0; qrColorIndex = 0
     }
@@ -841,16 +868,28 @@ struct ComposerView: View {
 
     private func loadPhoto(_ item: PhotosPickerItem?) {
         guard let item else { return }
+        // `PhotosPickerItem` is Equatable on the underlying asset identifier, so re-picking the
+        // *same* photo produces a value SwiftUI considers unchanged — `.onChange(of: photoItem)`
+        // then never fires and this function never runs again. Clearing the binding immediately
+        // guarantees every subsequent PhotosPicker selection, including the same asset, is a
+        // genuine nil → item transition that always triggers onChange.
+        photoItem = nil
         item.loadTransferable(type: Data.self) { result in
             // `loadTransferable` already calls back off the main thread — do the heavy
             // orientation-normalize + downscale here so a large photo doesn't block the UI.
-            guard case .success(let data?) = result, let img = UIImage(data: data) else { return }
+            guard case .success(let data?) = result, let img = UIImage(data: data) else {
+                if case .failure(let error) = result {
+                    self.ble.trace("Composer photo load failed: \(error)")
+                }
+                return
+            }
             let normalized = img.orientationNormalized()
             let preview = normalized.downscaled(maxDimension: canvasPreviewMaxDimension)
             DispatchQueue.main.async {
                 self.baseImage = normalized
                 self.previewBase = preview
                 self.pan = .zero; self.scale = 1
+                self.transformResetToken &+= 1
                 self.refreshCanvasImage()
             }
         }
@@ -883,7 +922,7 @@ struct ComposerView: View {
     private func resetPage() {
         // Photo + crop transform.
         baseImage = nil; previewBase = nil; canvasImage = nil; photoItem = nil
-        pan = .zero; scale = 1
+        pan = .zero; scale = 1; transformResetToken &+= 1
 
         // Annotations.
         activeTool = .photo

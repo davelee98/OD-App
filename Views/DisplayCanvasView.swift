@@ -18,6 +18,10 @@ struct DisplayCanvasView: View {
     // Photo crop transform (persisted by the Composer so it can render the final bitmap).
     @Binding var pan: CGSize
     @Binding var scale: CGFloat
+    /// Bumped by the Composer whenever `pan`/`scale` are force-reset from outside a gesture (new
+    /// photo, Reset button, full page reset). Syncs `basePan`/`baseScale` to match so the *next*
+    /// drag/pinch computes its delta from the reset origin instead of a stale pre-reset baseline.
+    var transformResetToken: Int = 0
 
     // Annotation layers.
     @Binding var strokes: [Stroke]
@@ -109,6 +113,7 @@ struct DisplayCanvasView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear { canvasSize = box }
             .onChange(of: box) { _, newBox in canvasSize = newBox }
+            .onChange(of: transformResetToken) { _, _ in basePan = .zero; baseScale = 1 }
         }
         .aspectRatio(aspectRatio, contentMode: .fit)
     }
