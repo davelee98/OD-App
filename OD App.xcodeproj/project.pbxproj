@@ -44,6 +44,7 @@
 		01000000000000000000004E /* ToolboxConfigRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000004E /* ToolboxConfigRuntime.swift */; };
 		01000000000000000000004F /* toolbox-config-engine.js in Resources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000004F /* toolbox-config-engine.js */; };
 		010000000000000000000050 /* ToolboxConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000050 /* ToolboxConfigTests.swift */; };
+		0100000000000000000000A4 /* BLEChunkSizeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000A4 /* BLEChunkSizeTests.swift */; };
 		010000000000000000000051 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000052 /* XCTest.framework */; };
 		010000000000000000000053 /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000053 /* SplashView.swift */; };
 		010000000000000000000054 /* AdvancedSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000054 /* AdvancedSettingsView.swift */; };
@@ -105,6 +106,7 @@
 		02000000000000000000004E /* ToolboxConfigRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolboxConfigRuntime.swift; sourceTree = "<group>"; };
 		02000000000000000000004F /* toolbox-config-engine.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "toolbox-config-engine.js"; sourceTree = "<group>"; };
 		020000000000000000000050 /* ToolboxConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolboxConfigTests.swift; sourceTree = "<group>"; };
+		0200000000000000000000A4 /* BLEChunkSizeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEChunkSizeTests.swift; sourceTree = "<group>"; };
 		020000000000000000000051 /* OD AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "OD AppTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		020000000000000000000052 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 		020000000000000000000053 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
@@ -261,6 +263,7 @@
 				0200000000000000000000A3 /* StringByteLimitTests.swift */,
 				0200000000000000000000A0 /* ToneCompressionTests.swift */,
 				0200000000000000000000A1 /* ODDeviceAdmissionTests.swift */,
+				0200000000000000000000A4 /* BLEChunkSizeTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -435,6 +438,7 @@
 				0100000000000000000000A3 /* StringByteLimitTests.swift in Sources */,
 				0100000000000000000000A0 /* ToneCompressionTests.swift in Sources */,
 				0100000000000000000000A1 /* ODDeviceAdmissionTests.swift in Sources */,
+				0100000000000000000000A4 /* BLEChunkSizeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
