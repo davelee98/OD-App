@@ -3,6 +3,9 @@
 xcuserdata/
 *.xcuserstate
 
+# Editor workspace (local, machine-specific)
+*.code-workspace
+
 # Local environment and secrets
 .env
 .env.*
