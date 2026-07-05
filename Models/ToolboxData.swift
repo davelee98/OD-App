@@ -153,6 +153,22 @@ struct ToolboxFieldDefinition: Decodable, Identifiable {
         case choices = "enum"
         case conditionalChoices = "conditional_enum"
     }
+
+    /// Mirrors `encodeField`/`decodeField` in the bundled toolbox-config-engine.js: `ssid`
+    /// and `password` are fixed-size zero-padded strings even though the schema does not
+    /// tag them `type: text`. The bundled Resources are read-only, so the rule is repeated
+    /// here — it must stay identical to the engine's special case.
+    var isTextField: Bool {
+        type == "text" || name == "ssid" || name == "password"
+    }
+
+    /// Maximum UTF-8 content bytes the engine keeps for a fixed-size text field: `size - 1`,
+    /// reserving the trailing null terminator (a 32-byte field holds at most 31 content
+    /// bytes). `nil` for non-text or variable-size fields.
+    var maxTextContentBytes: Int? {
+        guard isTextField, let bytes = size.byteCount else { return nil }
+        return max(0, bytes - 1)
+    }
 }
 
 struct ToolboxPacketDefinition: Decodable, Identifiable {
@@ -269,6 +285,40 @@ struct ToolboxConfiguration: Codable, Equatable {
 
     mutating func remove(type: Int) {
         packets.removeAll { $0.packetType == type }
+    }
+}
+
+/// Checks the bundled engine's `validationIssues` does not perform, computed in Swift because
+/// the bundled Resources are read-only. Over-limit text (typed before the UI enforced limits,
+/// or imported) is a warning, not an error — the engine truncates it safely to `size - 1`
+/// bytes + null terminator at encode time; this just stops that truncation from being silent.
+enum ToolboxSwiftValidation {
+    static func issues(for configuration: ToolboxConfiguration,
+                       schema: ToolboxSchema) -> [ToolboxValidationIssue] {
+        var issues: [ToolboxValidationIssue] = []
+        for packet in configuration.packets {
+            guard let definition = schema.packetTypes[String(packet.packetType)] else { continue }
+            for field in definition.fields {
+                if let limit = field.maxTextContentBytes,
+                   let value = packet.fields[field.name],
+                   value.utf8.count > limit {
+                    issues.append(ToolboxValidationIssue(
+                        severity: "warning", code: "text_too_long",
+                        message: "\(definition.name).\(field.name) exceeds \(limit) bytes and will be truncated"))
+                }
+                if field.name == "encryption_key", let bytes = field.size.byteCount {
+                    let value = packet.fields[field.name] ?? ""
+                    let hex = value.lowercased().hasPrefix("0x") ? String(value.dropFirst(2)) : value
+                    let isDisabled = hex.isEmpty || hex.allSatisfy { $0 == "0" }
+                    if !isDisabled, hex.count != bytes * 2 || !hex.allSatisfy(\.isHexDigit) {
+                        issues.append(ToolboxValidationIssue(
+                            severity: "warning", code: "key_length",
+                            message: "\(definition.name).\(field.name) should be \(bytes * 2) hex characters"))
+                    }
+                }
+            }
+        }
+        return issues
     }
 }
 

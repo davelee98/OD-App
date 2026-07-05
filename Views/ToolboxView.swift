@@ -387,10 +387,20 @@ struct ToolboxView: View {
                     Toggle("Encryption", isOn: $isLocked).labelsHidden()
                 }
                 if isLocked {
-                    TextField("32-character encryption key", text: $encryptionKey)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .font(.caption.monospaced())
+                    VStack(alignment: .leading, spacing: 4) {
+                        TextField("32-character encryption key", text: $encryptionKey)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.asciiCapable)
+                            .font(.caption.monospaced())
+                            .onChange(of: encryptionKey) { _, newValue in
+                                let filtered = String(newValue.lowercased().filter(\.isHexDigit).prefix(32))
+                                if filtered != newValue { encryptionKey = filtered }
+                            }
+                        Text("\(encryptionKey.count)/32")
+                            .font(.caption2)
+                            .foregroundStyle(encryptionKey.count == 32 ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
+                    }
                     Button("Generate Random Key") { encryptionKey = randomKey() }
                     if let device, encryptionKey.count == 32, !device.isAuthenticated {
                         Button("Authenticate with This Key") {
@@ -679,7 +689,16 @@ struct ToolboxView: View {
     /// `.onChange(of: schemaText)`, and after a schema Apply — never from `body`.
     private func recomputeDerivedConfiguration() {
         encodedConfiguration = try? ToolboxPacketCodec.encode(configuration, schema: schema)
-        configurationValidation = try? ToolboxConfigRuntime.shared.validate(configuration)
+        let engineValidation = try? ToolboxConfigRuntime.shared.validate(configuration)
+        let extra = ToolboxSwiftValidation.issues(for: configuration, schema: schema)
+        if extra.isEmpty {
+            configurationValidation = engineValidation
+        } else {
+            configurationValidation = ToolboxValidation(
+                issues: (engineValidation?.issues ?? []) + extra,
+                encodedLength: engineValidation?.encodedLength ?? encodedConfiguration?.count ?? 0
+            )
+        }
     }
 
     private var shareURL: URL? {
@@ -724,8 +743,10 @@ struct ToolboxView: View {
 
     private func addPacket(id: String, definition: ToolboxPacketDefinition) {
         guard canAddPacket(id: id, definition: definition) else { return }
+        // Seed by `isTextField`, not `type == "text"` — the engine treats ssid/password as
+        // text by name, so seeding them "0x0" wrote those literal characters as the SSID.
         var fields = Dictionary(uniqueKeysWithValues: definition.fields.map {
-            ($0.name, $0.type == "text" ? "" : "0x0")
+            ($0.name, $0.isTextField ? "" : "0x0")
         })
         if definition.repeatable == true,
            definition.fields.contains(where: { $0.name == "instance_number" }) {
@@ -878,6 +899,25 @@ private struct ToolboxPacketEditor: View {
                                     Text(description).font(.caption).foregroundStyle(.secondary)
                                 }
                             }
+                        } else if field.isTextField {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(field.name.replacingOccurrences(of: "_", with: " ").capitalized)
+                                    .font(.subheadline)
+                                TextField("", text: textBinding(field.name))
+                                    .font(.body.monospaced())
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .utf8ByteLimit(field.maxTextContentBytes, text: textBinding(field.name))
+                                if let limit = field.maxTextContentBytes {
+                                    let used = (packet.fields[field.name] ?? "").utf8.count
+                                    Text("\(used)/\(limit) bytes")
+                                        .font(.caption2)
+                                        .foregroundStyle(used >= limit ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                                }
+                                if let description = field.description {
+                                    Text(description).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
                         } else {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(field.name.replacingOccurrences(of: "_", with: " ").capitalized)
@@ -907,6 +947,12 @@ private struct ToolboxPacketEditor: View {
 
     private func valueBinding(_ key: String) -> Binding<String> {
         Binding(get: { packet.fields[key] ?? "0x0" }, set: { packet.fields[key] = $0 })
+    }
+
+    /// Text fields fall back to an empty string, not "0x0" — a missing string value must not
+    /// display (or encode, see `addPacket`) as the literal characters `0x0`.
+    private func textBinding(_ key: String) -> Binding<String> {
+        Binding(get: { packet.fields[key] ?? "" }, set: { packet.fields[key] = $0 })
     }
 
     private func bitBinding(_ key: String, bit: Int) -> Binding<Bool> {
