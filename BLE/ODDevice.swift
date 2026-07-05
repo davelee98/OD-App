@@ -469,6 +469,12 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             guard let self else { return }
             self.uploadWatchdog?.cancel()
             self.uploadWatchdog = nil
+            // The Composer already returned to the canvas once every chunk was acked (see
+            // completeUploadEarly below) — this closure only still matters if that hasn't
+            // happened yet. Once we've moved on, the device's eventual refresh-complete/timeout
+            // notification is irrelevant to the UI, so ignore it rather than reopening the
+            // status overlay after the user has left it.
+            guard self.uploadPhase == .sending else { return }
             switch result {
             case .success:
                 self.uploadProgress = 1
@@ -478,6 +484,17 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 self.failUpload(error.localizedDescription)
             }
         }
+    }
+
+    /// Ends the send as soon as every chunk has been transmitted and acked, rather than waiting
+    /// for the device's silent e-paper refresh to finish (`0x73`, seconds to tens of seconds later
+    /// with no BLE traffic in between). The Composer only needs confirmation that the image data
+    /// made it to the display; the refresh itself is the display's problem from here.
+    private func completeUploadEarly() {
+        uploadWatchdog?.cancel()
+        uploadWatchdog = nil
+        finishUploadTiming()
+        uploadPhase = .succeeded
     }
 
     /// Records the send duration from `uploadStartTime`. Called at every terminal transition so the
@@ -511,26 +528,23 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     /// `ble-common.js` streams an image over many chunks with no overall timeout, so a device that
-    /// stops responding mid-upload would leave the send stuck and the progress bar frozen.
-    /// The watchdog is re-armed on every `uploadProgress`/`uploadStatus` event (see
+    /// stops responding mid-upload would leave the send stuck and the progress bar frozen. The
+    /// watchdog is re-armed on every `uploadProgress`/`uploadStatus` event (see
     /// `handleRuntimeEvent`) so a slow-but-advancing upload isn't killed; it only fires after a
-    /// window with no forward progress. Chunk transfer uses 30s. Once every chunk is sent
-    /// (`uploadProgress >= 1`) the panel refreshes its e-paper — a phase that legitimately
-    /// produces **no BLE traffic** and, on color panels, routinely exceeds 30s — so the window
-    /// stretches to 120s to avoid reporting a timeout on an upload that is about to succeed.
+    /// window with no forward progress. Once every chunk is sent and acked (`uploadProgress >= 1`)
+    /// the send completes immediately (see `completeUploadEarly`) without arming this again, so the
+    /// window only ever needs to cover chunk transfer, not the device's later (and silent) e-paper
+    /// refresh.
     private func armUploadWatchdog() {
         uploadWatchdog?.cancel()
-        let refreshing = uploadProgress >= 1
-        let window: TimeInterval = refreshing ? 120 : 30
+        let window: TimeInterval = 30
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.trace("uploadImage STALL WATCHDOG: no progress \(Int(window))s; " +
                        "progress=\(self.uploadProgress), appState=\(self.connectionState), " +
                        "peripheralState=\(self.peripheral.state.rawValue)", level: .error)
             self.uploadProgress = 0
-            self.failUpload(refreshing
-                ? "The display did not confirm its refresh in time. It may still be updating."
-                : "Image upload timed out. The display stopped responding.")
+            self.failUpload("Image upload timed out. The display stopped responding.")
         }
         uploadWatchdog = work
         DispatchQueue.main.asyncAfter(deadline: .now() + window, execute: work)
@@ -572,8 +586,14 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             let progress = (payload["progress"] as? NSNumber)?.doubleValue ?? 0
             let total = max(1, (payload["total"] as? NSNumber)?.doubleValue ?? 1)
             uploadProgress = min(1, progress / total)
-            // Forward progress resets the stall window so a slow-but-advancing upload isn't killed.
-            if uploadPhase == .sending { armUploadWatchdog() }
+            guard uploadPhase == .sending else { break }
+            if uploadProgress >= 1 {
+                // All chunks are sent and acked — don't wait for the device's refresh cycle.
+                completeUploadEarly()
+            } else {
+                // Forward progress resets the stall window so a slow-but-advancing upload isn't killed.
+                armUploadWatchdog()
+            }
         case "configProgress":
             let received = (payload["received"] as? NSNumber)?.doubleValue ?? 0
             let total = max(1, (payload["total"] as? NSNumber)?.doubleValue ?? 1)
