@@ -182,4 +182,31 @@ final class ToolboxConfigTests: XCTestCase {
                 .filter { $0.code == "key_length" }.isEmpty, "'\(valid)' should not be flagged")
         }
     }
+
+    // MARK: - Saved-display provenance (add-device config-state fix)
+
+    /// A registry entry created without a confirmed read must not masquerade as hardware fact:
+    /// `resolutionConfirmed` starts false so provisional values can be marked and safely overwritten.
+    func testNewEntityStartsUnconfirmed() {
+        let entity = SavedDisplayEntity(id: "dev-1", friendlyName: "Kitchen")
+        XCTAssertFalse(entity.resolutionConfirmed)
+        XCTAssertEqual(entity.width, 800)
+        XCTAssertEqual(entity.height, 480)
+    }
+
+    /// `apply(config:)` is the only path that confirms a resolution — it copies the real dimensions
+    /// and color scheme off the read and flips the provenance flag.
+    func testApplyConfigConfirmsResolution() throws {
+        let model = ODConfigModel(toolbox: try simpleConfiguration())   // ep75-800x480 preset
+        XCTAssertEqual(model.displayWidth, 800)
+        XCTAssertEqual(model.displayHeight, 480)
+
+        let entity = SavedDisplayEntity(id: "dev-2", friendlyName: "Office",
+                                        width: 111, height: 222, colorScheme: 9)
+        entity.apply(config: model)
+        XCTAssertTrue(entity.resolutionConfirmed)
+        XCTAssertEqual(entity.width, model.displayWidth)
+        XCTAssertEqual(entity.height, model.displayHeight)
+        XCTAssertEqual(entity.colorScheme, Int(model.colorScheme))
+    }
 }

@@ -47,6 +47,12 @@ final class SavedDisplayEntity {
     var colorScheme: Int
     var lastSeen: Date
     var dateAdded: Date
+    /// True once `width`/`height`/`colorScheme` came from an actual hardware config read (via
+    /// `apply(config:)`); false while they are still the fallback guess. Distinguishes a confirmed
+    /// panel from "we never asked", so the UI can mark provisional values and safe overwrites.
+    /// Defaults to false so a lightweight SwiftData migration of existing stores treats their
+    /// values as unconfirmed until the next successful read.
+    var resolutionConfirmed: Bool = false
 
     init(id: String,
          friendlyName: String,
@@ -54,6 +60,7 @@ final class SavedDisplayEntity {
          width: Int = 800,
          height: Int = 480,
          colorScheme: Int = 0,
+         resolutionConfirmed: Bool = false,
          lastSeen: Date = .now,
          dateAdded: Date = .now) {
         self.id = id
@@ -62,6 +69,7 @@ final class SavedDisplayEntity {
         self.width = width
         self.height = height
         self.colorScheme = colorScheme
+        self.resolutionConfirmed = resolutionConfirmed
         self.lastSeen = lastSeen
         self.dateAdded = dateAdded
     }
@@ -90,11 +98,13 @@ extension SavedDisplayEntity {
 
     var resolution: CGSize { CGSize(width: width, height: height) }
 
-    /// Refresh cached hardware facts from a freshly-read device config.
+    /// Refresh cached hardware facts from a freshly-read device config. This is the only path that
+    /// marks the resolution confirmed — a plain Save never fabricates one.
     func apply(config: ODConfigModel) {
         if config.displayWidth > 0 { width = config.displayWidth }
         if config.displayHeight > 0 { height = config.displayHeight }
         colorScheme = Int(config.colorScheme)
+        resolutionConfirmed = true
         lastSeen = .now
     }
 }

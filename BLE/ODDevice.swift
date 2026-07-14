@@ -16,7 +16,13 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var isAuthenticated = false
     @Published var config: ODConfigModel?
     @Published var configReadProgress: Double = 0
+    @Published var configReadState: ConfigReadState = .unread
     @Published var lastError: String?
+
+    /// Lifecycle of the panel's configuration read, so views can distinguish "still fetching",
+    /// "read from hardware", and "read failed" instead of treating a nil `config` as all three.
+    /// A loaded `config` alongside `.reading` means a cached value is being refreshed on reconnect.
+    enum ConfigReadState: Equatable { case unread, reading, loaded, failed(String) }
 
     /// The lifecycle of an image send, driving the Composer's status overlay. This is the single
     /// source of truth — `isUploading` is derived from it, so there is exactly one writer.
@@ -57,9 +63,15 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     private var configWriteAckHandler: ((Data) -> Void)?
     // The ack handler and watchdogs above are single shared slots: two overlapping config
     // operations would clobber each other's, leaving the loser to complete only via timeout.
-    // These flags reject the overlapping caller outright instead.
-    private var isConfigReadInFlight = false
+    // A read-in-flight is tracked by `configReadState == .reading`; the write flag rejects an
+    // overlapping writer outright.
     private var isConfigWriteInFlight = false
+    // Every completion waiting on the current read (the auto-read on connect plus any view that
+    // asks while it's still in flight), fired together with the shared result.
+    private var configReadCompletions: [(Result<ODConfigModel, Error>) -> Void] = []
+    // The terminal handler for the in-flight read, so the watchdog and a mid-read disconnect can
+    // finish it without reaching into `readConfig`'s local scope.
+    private var configReadFinish: ((Result<ODConfigModel, Error>) -> Void)?
 
     init(peripheral: CBPeripheral, initialMSD: Data? = nil,
          logHandler: @escaping (LogEntry) -> Void) {
@@ -145,7 +157,13 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         msdWatchdog?.cancel();         msdWatchdog = nil
         authWatchdog?.cancel();        authWatchdog = nil
         configWriteAckHandler = nil
-        isConfigReadInFlight = false
+        // Drain any read that was still in flight with a definitive failure so its waiters (and the
+        // config-read state) don't hang; `setConnected(false)` above may also reject it, but the
+        // `didComplete` guard makes whichever loses the race a no-op.
+        if configReadState == .reading {
+            configReadFinish?(.failure(ODDeviceError("The display disconnected before the configuration was read.")))
+        }
+        configReadFinish = nil
         isConfigWriteInFlight = false
     }
 
@@ -156,6 +174,11 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             self.runtime?.setConnected(true)
             self.connectionState = .connected
             self.readFirmware()
+            // Auto-read config from the point the GATT link is actually usable — not from a view's
+            // onChange, which fires while `didConnect` still has the link in `.connecting` and the JS
+            // engine rejects the read with "Not connected". Every surface (Add sheet, Composer,
+            // Toolbox) gets the result for free; a cached value is refreshed on each reconnect.
+            self.readConfig()
         }
         transport.onNotification = { [weak self] data in
             guard let self else { return }
@@ -298,23 +321,34 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     ///   an observer watching those `@Published` properties for a *change*).
     func readConfig(completion: ((Result<ODConfigModel, Error>) -> Void)? = nil) {
         trace("readConfig requested; appState=\(connectionState), peripheralState=\(peripheral.state.rawValue)")
-        guard !isConfigReadInFlight else {
-            trace("readConfig rejected: a configuration read is already in progress", level: .warning)
-            completion?(.failure(ODDeviceError("A configuration read is already in progress")))
+        if configReadState == .reading {
+            // A read is already in flight (typically the auto-read kicked off on connect). Ride
+            // along with it instead of rejecting, so this caller's completion still fires with the
+            // shared result rather than a spurious "already in progress" error.
+            trace("readConfig joining the in-flight read", level: .info)
+            if let completion { configReadCompletions.append(completion) }
             return
         }
-        isConfigReadInFlight = true
+        configReadState = .reading
         configReadProgress = 0
+        if let completion { configReadCompletions.append(completion) }
         var didComplete = false
         let finish: (Result<ODConfigModel, Error>) -> Void = { [weak self] result in
-            guard !didComplete else { return }
+            guard let self, !didComplete else { return }
             didComplete = true
-            self?.isConfigReadInFlight = false
-            completion?(result)
+            self.configReadWatchdog?.cancel()
+            self.configReadWatchdog = nil
+            self.configReadFinish = nil
+            switch result {
+            case .success: self.configReadState = .loaded
+            case .failure(let error): self.configReadState = .failed(error.localizedDescription)
+            }
+            let waiters = self.configReadCompletions
+            self.configReadCompletions.removeAll()
+            waiters.forEach { $0(result) }
         }
-        armConfigReadWatchdog {
-            finish(.failure(ODDeviceError("Reading configuration timed out. The device stopped responding.")))
-        }
+        configReadFinish = finish
+        armConfigReadWatchdog()
         call("readConfig") { [weak self] result in
             guard let self else { return }
             self.configReadWatchdog?.cancel()
@@ -357,13 +391,18 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// responding mid-read (or never answers 0x0040 at all), the JS promise never resolves and
     /// the UI is left silently spinning on `configReadProgress` forever. This surfaces that as a
     /// visible, logged failure instead of an indefinite stall.
-    private func armConfigReadWatchdog(onTimeout: @escaping () -> Void) {
+    /// Re-armed on every `configProgress` event (see `handleRuntimeEvent`) so a chunked read that is
+    /// making steady progress but running long isn't declared stalled — the window only ever needs to
+    /// cover a gap between chunks, mirroring the upload watchdog. Fires the shared `configReadFinish`
+    /// so the timeout also flips `configReadState` to `.failed` and notifies every waiter.
+    private func armConfigReadWatchdog() {
         configReadWatchdog?.cancel()
         configReadWatchdog = makeWatchdog(operation: "readConfig") { [weak self] in
             guard let self else { return }
-            self.lastError = "Reading configuration timed out. The device stopped responding."
+            let message = "Reading configuration timed out. The device stopped responding."
+            self.lastError = message
             self.configReadProgress = 0
-            onTimeout()
+            self.configReadFinish?(.failure(ODDeviceError(message)))
         }
     }
 
@@ -689,6 +728,8 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             let received = (payload["received"] as? NSNumber)?.doubleValue ?? 0
             let total = max(1, (payload["total"] as? NSNumber)?.doubleValue ?? 1)
             configReadProgress = min(1, received / total)
+            // Forward progress resets the stall window so a slow-but-advancing read isn't killed.
+            if configReadState == .reading { armConfigReadWatchdog() }
         default:
             break
         }
