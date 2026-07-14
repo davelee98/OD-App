@@ -84,6 +84,7 @@ struct AdvancedView: View {
 struct BLELogView: View {
     @EnvironmentObject private var ble: BLEManager
     @State private var filter: LogFilter = .all
+    @State private var showClearConfirm = false
 
     private var device: ODDevice? { ble.connectedDevice }
 
@@ -127,38 +128,56 @@ struct BLELogView: View {
 
                 // The full retained log (BLEManager caps it at 500), not a `.suffix(50)` —
                 // the Tester already showed everything, and hiding 450 entries here made the
-                // two surfaces disagree.
+                // two surfaces disagree. Newest-first (the diagnostic-log convention) so the event
+                // that prompted opening this screen is at the top, not buried under up to 500 rows.
                 if filteredEntries.isEmpty {
                     Text(ble.log.isEmpty ? "No activity yet." : "No entries match this filter.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(filteredEntries) { entry in
+                    ForEach(Array(filteredEntries.reversed())) { entry in
                         LogEntryRow(entry: entry)
                     }
-                }
-
-                if !ble.log.isEmpty {
-                    ShareLink(item: formattedLog, preview: SharePreview("BLE Log")) {
-                        Label("Share Log", systemImage: "square.and.arrow.up")
-                    }
-                    Button(role: .destructive) {
-                        ble.clearLog()
-                    } label: {
-                        Label("Clear Log", systemImage: "trash")
+                    if ble.trimmedCount > 0 {
+                        // Oldest end of a newest-first list — mark where the trim boundary is so a
+                        // capped log (and its export) doesn't read as complete.
+                        Text("Older entries were trimmed — showing the most recent \(ble.log.count) of \(ble.log.count + ble.trimmedCount).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
         }
         .navigationTitle("BLE Log")
         .navigationBarTitleDisplayMode(.inline)
+        // Share/Clear live in the nav bar (their standard place) so they're reachable without
+        // scrolling past up to 500 rows.
+        .toolbar {
+            if !ble.log.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ShareLink(item: formattedLog, preview: SharePreview("BLE Log")) {
+                        Label("Share Log", systemImage: "square.and.arrow.up")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .destructive) {
+                        showClearConfirm = true
+                    } label: {
+                        Label("Clear Log", systemImage: "trash")
+                    }
+                }
+            }
+        }
+        // Same confirmation the Tester uses (shared modifier) — clearing wipes the app-wide log, so
+        // a mis-tap here shouldn't silently destroy an engineer's only record of a failure.
+        .clearSharedLogConfirmation(isPresented: $showClearConfirm) { ble.clearLog() }
     }
 
     /// Plain-text export of the whole retained session log (unfiltered).
     private var formattedLog: String {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss.SSS"
-        return ble.log.map { entry in
+        let body = ble.log.map { entry in
             let direction = switch entry.direction {
             case .sent: "→"
             case .received: "←"
@@ -169,5 +188,8 @@ struct BLELogView: View {
                 .filter { !$0.isEmpty }
                 .joined(separator: " ")
         }.joined(separator: "\n")
+        // Mirror the on-screen trim notice so a shared export never looks complete when it isn't.
+        guard ble.trimmedCount > 0 else { return body }
+        return "# Older entries were trimmed — showing the most recent \(ble.log.count) of \(ble.log.count + ble.trimmedCount).\n" + body
     }
 }
