@@ -860,9 +860,16 @@ struct ComposerView: View {
     }
 
     private func syncFromDevice() {
-        if let scheme = device?.config?.colorScheme { applyScheme(scheme) }
-        else { applyScheme(UInt8(clamping: entity.colorScheme)) }
-        if device?.config == nil { device?.readConfig() }
+        // Repair the registry whenever a config is already in hand — the .onChange(of: device?.config)
+        // above only fires when it *changes* while this view is visible, so a config loaded before the
+        // Composer appeared (e.g. the auto-read on connect) would otherwise never reach the entity.
+        if let config = device?.config {
+            entity.apply(config: config)
+            applyScheme(config.colorScheme)
+        } else {
+            applyScheme(UInt8(clamping: entity.colorScheme))
+            device?.readConfig()
+        }
     }
 
     private func applyScheme(_ scheme: UInt8) {

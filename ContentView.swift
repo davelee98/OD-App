@@ -210,7 +210,9 @@ struct AddDisplaySheet: View {
             if state == .poweredOn, connectedDevice == nil, !ble.isScanning { ble.startScan() }
         }
         .onChange(of: connectedDevice) { _, device in
-            if let device, device.config == nil { device.readConfig() }
+            // The config read is auto-kicked from ODDevice's transport.onReady once GATT is actually
+            // usable — triggering it here (the instant didConnect publishes, still `.connecting`)
+            // deterministically failed with "Not connected" and never retried.
             if let device = device, friendlyName.isEmpty { friendlyName = device.name }
         }
         .onDisappear {
@@ -231,18 +233,10 @@ struct AddDisplaySheet: View {
                 HStack {
                     Image(systemName: device == nil ? "wifi.slash" : "dot.radiowaves.left.and.right")
                         .foregroundStyle(device == nil ? Color.secondary : Color.green)
-                    VStack(alignment: .leading) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(device?.name ?? entity?.friendlyName ?? "Display")
                             .font(.subheadline.weight(.semibold))
-                        if let cfg = device?.config {
-                            Text("\(cfg.displayWidth)×\(cfg.displayHeight) · \(cfg.colorSchemeName)")
-                                .font(.caption).foregroundStyle(.secondary)
-                        } else if let entity {
-                            Text("\(entity.width)×\(entity.height) · \(cachedColorSchemeName(for: entity))")
-                                .font(.caption).foregroundStyle(.secondary)
-                        } else {
-                            Text("Reading configuration…").font(.caption).foregroundStyle(.secondary)
-                        }
+                        configStatus(for: device)
                     }
                 }
             }
@@ -261,7 +255,56 @@ struct AddDisplaySheet: View {
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { save(device) }
-                    .disabled(friendlyName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(saveDisabled(for: device))
+            }
+        }
+    }
+
+    /// A new display can't be saved until its real configuration has been read — persisting the
+    /// fallback guess as if confirmed is the bug this flow exists to prevent. Editing an existing
+    /// entry only rewrites its name/location, so it never waits on a read.
+    private func saveDisabled(for device: ODDevice?) -> Bool {
+        if friendlyName.trimmingCharacters(in: .whitespaces).isEmpty { return true }
+        if !isEditing, device?.config == nil { return true }
+        return false
+    }
+
+    @ViewBuilder
+    private func configStatus(for device: ODDevice?) -> some View {
+        let state = device?.configReadState ?? .unread
+        if let cfg = device?.config {
+            // Confirmed from hardware this session; a trailing spinner means a reconnect is refreshing it.
+            HStack(spacing: 6) {
+                Text("\(cfg.displayWidth)×\(cfg.displayHeight) · \(cfg.colorSchemeName)")
+                    .font(.caption).foregroundStyle(.secondary)
+                if state == .reading { ProgressView().controlSize(.mini) }
+            }
+        } else if case .failed = state {
+            VStack(alignment: .leading, spacing: 4) {
+                if let entity {
+                    Text("\(entity.width)×\(entity.height) · \(cachedColorSchemeName(for: entity))")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("Couldn't refresh the configuration.")
+                        .font(.caption2).foregroundStyle(.orange)
+                } else {
+                    Text("Couldn't read the display configuration.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                Button("Retry") { device?.readConfig() }
+                    .font(.caption).buttonStyle(.borderless)
+            }
+        } else if let entity {
+            // Stale cached value shown while a fresh read runs (edit mode).
+            HStack(spacing: 6) {
+                Text("\(entity.width)×\(entity.height) · \(cachedColorSchemeName(for: entity))")
+                    .font(.caption).foregroundStyle(.secondary)
+                if state == .reading { ProgressView().controlSize(.mini) }
+            }
+        } else {
+            // New display, no cached value yet: fetching (or about to).
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("Reading configuration…").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -277,10 +320,9 @@ struct AddDisplaySheet: View {
             return
         }
 
-        guard let device else { return }
-        let width = (device.config?.displayWidth ?? 0) > 0 ? device.config!.displayWidth : 800
-        let height = (device.config?.displayHeight ?? 0) > 0 ? device.config!.displayHeight : 480
-        let scheme = Int(device.config?.colorScheme ?? 0)
+        // Save is disabled for a new display until the config is read (see saveDisabled), so this is
+        // reached only with a confirmed configuration in hand — never the fabricated 800×480 guess.
+        guard let device, let config = device.config else { return }
 
         // Upsert: update an existing registry entry for this peripheral rather than duplicating.
         let id = device.deviceID
@@ -288,13 +330,13 @@ struct AddDisplaySheet: View {
         if let existing = try? modelContext.fetch(descriptor).first {
             existing.friendlyName = trimmedName
             existing.deviceLocation = deviceLocation.trimmingCharacters(in: .whitespacesAndNewlines)
-            existing.width = width; existing.height = height
-            existing.colorScheme = scheme; existing.lastSeen = .now
+            existing.apply(config: config)   // overwrite dimensions only with the freshly-read config
         } else {
-            modelContext.insert(SavedDisplayEntity(
+            let entity = SavedDisplayEntity(
                 id: id, friendlyName: trimmedName,
-                deviceLocation: deviceLocation.trimmingCharacters(in: .whitespacesAndNewlines),
-                width: width, height: height, colorScheme: scheme))
+                deviceLocation: deviceLocation.trimmingCharacters(in: .whitespacesAndNewlines))
+            entity.apply(config: config)
+            modelContext.insert(entity)
         }
         saved = true
         dismiss()
