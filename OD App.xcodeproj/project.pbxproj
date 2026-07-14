@@ -18,7 +18,6 @@
 		01000000000000000000000C /* BLETesterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000C /* BLETesterView.swift */; };
 		01000000000000000000000D /* DeviceRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000D /* DeviceRowView.swift */; };
 		01000000000000000000000E /* ConfigModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000E /* ConfigModel.swift */; };
-		01000000000000000000000F /* DevicePreset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000F /* DevicePreset.swift */; };
 		010000000000000000000010 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000010 /* CoreBluetooth.framework */; };
 		010000000000000000000011 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000011 /* Security.framework */; };
 		010000000000000000000021 /* ImageProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000021 /* ImageProcessor.swift */; };
@@ -78,7 +77,6 @@
 		02000000000000000000000C /* BLETesterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLETesterView.swift; sourceTree = "<group>"; };
 		02000000000000000000000D /* DeviceRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceRowView.swift; sourceTree = "<group>"; };
 		02000000000000000000000E /* ConfigModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigModel.swift; sourceTree = "<group>"; };
-		02000000000000000000000F /* DevicePreset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicePreset.swift; sourceTree = "<group>"; };
 		020000000000000000000010 /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = System/Library/Frameworks/CoreBluetooth.framework; sourceTree = SDKROOT; };
 		020000000000000000000011 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		020000000000000000000012 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -211,7 +209,6 @@
 			children = (
 				020000000000000000000040 /* DisplayDevice.swift */,
 				02000000000000000000000E /* ConfigModel.swift */,
-				02000000000000000000000F /* DevicePreset.swift */,
 				020000000000000000000021 /* ImageProcessor.swift */,
 				020000000000000000000025 /* ToolboxData.swift */,
 				0200000000000000000000A2 /* StringByteLimit.swift */,
@@ -417,7 +414,6 @@
 				01000000000000000000000C /* BLETesterView.swift in Sources */,
 				01000000000000000000000D /* DeviceRowView.swift in Sources */,
 				01000000000000000000000E /* ConfigModel.swift in Sources */,
-				01000000000000000000000F /* DevicePreset.swift in Sources */,
 				010000000000000000000054 /* AdvancedSettingsView.swift in Sources */,
 				010000000000000000000021 /* ImageProcessor.swift in Sources */,
 				010000000000000000000022 /* ToolboxView.swift in Sources */,
@@ -575,7 +571,6 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
-				DEVELOPMENT_TEAM = GUYFAK8DC6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
@@ -600,7 +595,6 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
-				DEVELOPMENT_TEAM = GUYFAK8DC6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
