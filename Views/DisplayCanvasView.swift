@@ -21,6 +21,9 @@ struct DisplayCanvasView: View {
     // zoom multiplier and is already box-independent.
     @Binding var pan: CGSize
     @Binding var scale: CGFloat
+    /// How the photo is mapped onto the canvas before `scale`/`pan` (Cover / Contain / Stretch).
+    /// The panel's fit-mode buttons own this; the canvas only reads it to lay out the photo.
+    var fitMode: PhotoFitMode = .cover
 
     // Annotation layers. Geometry inside these is stored normalized to the canvas box (see `Stroke`,
     // `TextItem`, `QRItem`); this view converts to/from view points at the gesture/render boundary.
@@ -62,6 +65,7 @@ struct DisplayCanvasView: View {
     @State private var currentStroke: Stroke?
     @State private var pinchBaseScale: CGFloat?   // photo zoom baseline, captured on the first pinch tick
     @State private var pinchActive = false        // a magnification is in progress → gate the drag/draw layer
+    @State private var pinchDuringDraw = false    // a pinch preempted this draw → decline strokes for the rest of the touch
 
     // Selection-drag accumulators. Hit-test happens once on the first onChanged of a drag.
     @State private var dragStarted = false
@@ -74,6 +78,10 @@ struct DisplayCanvasView: View {
 
     /// A tap moves the finger less than this; beyond it the gesture is treated as a drag.
     private let tapSlop: CGFloat = 10
+
+    /// Lower bound for pinch zoom. Below the fit-mode baseline (`< 1`) the photo shrinks smaller than
+    /// the canvas, revealing the white background around it; this floor stops it collapsing to a dot.
+    static let minPhotoScale: CGFloat = 0.2
 
     private var aspectRatio: CGFloat {
         guard displaySize.height > 0 else { return 1 }
@@ -89,12 +97,17 @@ struct DisplayCanvasView: View {
                 Color.white
 
                 if let image {
+                    // Draw size/position come straight from the shared `PhotoLayout` (same formula
+                    // the composite render uses), so on-screen framing == the rasterized bitmap for
+                    // every fit mode + zoom + pan. `.resizable()` with no aspectRatio fills the
+                    // computed rect: uniform for Cover/Contain (the rect keeps the photo's aspect),
+                    // non-uniform for Stretch (the rect deliberately doesn't).
+                    let rect = PhotoLayout.drawRect(container: box, imageSize: image.size,
+                                                    fitMode: fitMode, scale: scale, pan: pan)
                     Image(uiImage: image)
                         .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: box.width, height: box.height)
-                        .scaleEffect(scale)
-                        .offset(CanvasSpace(box: box).toPoint(size: pan))
+                        .frame(width: rect.width, height: rect.height)
+                        .position(x: rect.midX, y: rect.midY)
                 } else {
                     placeholder
                 }
@@ -375,7 +388,8 @@ struct DisplayCanvasView: View {
             .onChanged { value in
                 pinchActive = true
                 if pinchBaseScale == nil { pinchBaseScale = scale }
-                scale = max(1, (pinchBaseScale ?? scale) * value)
+                // Floor at `minPhotoScale` (not 1) so the user can shrink the photo below canvas size.
+                scale = max(Self.minPhotoScale, (pinchBaseScale ?? scale) * value)
             }
             .onEnded { _ in
                 pinchBaseScale = nil
@@ -387,9 +401,11 @@ struct DisplayCanvasView: View {
         let space = CanvasSpace(box: box)
         return DragGesture(minimumDistance: 0)
             .onChanged { v in
-                // A concurrent pinch is zooming the photo — abandon any in-progress stroke so the
-                // pinch doesn't also commit a stray line.
-                if pinchActive { currentStroke = nil; return }
+                // A pinch is zooming the photo — or has, earlier in this touch. Abandon any
+                // in-progress stroke and stay disabled for the sequence's remainder: the surviving
+                // finger keeps this DragGesture alive after the magnification ends, and letting it
+                // resume would lay (and commit) a stray line. `pinchDuringDraw` makes the freeze sticky.
+                if pinchActive || pinchDuringDraw { pinchDuringDraw = true; currentStroke = nil; return }
                 let p = space.toNorm(v.location)
                 if currentStroke == nil {
                     currentStroke = Stroke(color: color(drawColorIndex),
@@ -399,11 +415,12 @@ struct DisplayCanvasView: View {
                 }
             }
             .onEnded { _ in
-                if !pinchActive, let s = currentStroke, s.points.count > 1 {
+                if !pinchActive, !pinchDuringDraw, let s = currentStroke, s.points.count > 1 {
                     onCommitUndo(snapshot())
                     strokes.append(s)
                 }
                 currentStroke = nil
+                pinchDuringDraw = false   // reset the sticky freeze for the next touch sequence
             }
     }
 
@@ -427,9 +444,13 @@ struct DisplayCanvasView: View {
                     pinchDuringDrag = false
                     if dragTarget != nil { preDragSnapshot = snapshot() }
                 }
-                if pinchActive {
-                    // Pinch took over: hold everything at its gesture-start value so the zoom doesn't
-                    // also drag the element or drift the photo pan.
+                if pinchActive || pinchDuringDrag {
+                    // Pinch took over — or did earlier in this touch. Hold everything at its
+                    // gesture-start value so the zoom doesn't also drag the element or drift the pan,
+                    // and keep holding for the sequence's remainder: the surviving finger keeps this
+                    // DragGesture alive after the magnification ends, and its translation now carries
+                    // the pinch's motion, so resuming would jump. `pinchDuringDrag` makes it sticky
+                    // (onEnded still swallows the tap/commit).
                     pinchDuringDrag = true
                     if let target = dragTarget, let origin = dragOrigin {
                         move(target, toNormalized: space.toNorm(origin))
