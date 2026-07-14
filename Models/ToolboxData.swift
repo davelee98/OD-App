@@ -90,6 +90,37 @@ struct ToolboxPower: Decodable, Identifiable {
     let index: Int?
 }
 
+/// Presets that carry an explicit catalog `index` — the value `build_simple` writes into the
+/// manufacturer packet's `simple_config_*_index` fields (see `presetIndex` in
+/// `toolbox-config-engine.js`). Read-back must invert that mapping through `index`, not list
+/// position, or every preset whose `index` ≠ position mis-resolves.
+protocol ToolboxIndexedPreset: Identifiable where ID == String {
+    var index: Int? { get }
+}
+
+extension ToolboxBoard: ToolboxIndexedPreset {}
+extension ToolboxDisplay: ToolboxIndexedPreset {}
+extension ToolboxPower: ToolboxIndexedPreset {}
+
+extension Array where Element: ToolboxIndexedPreset {
+    /// The stored `simple_config_*_index` value for `item` — a mirror of `presetIndex` in
+    /// `toolbox-config-engine.js`: the preset's explicit catalog `index`, or its 1-based list
+    /// position when it has none.
+    func presetIndex(for item: Element) -> Int {
+        if let index = item.index { return index }
+        return (firstIndex { $0.id == item.id } ?? -1) + 1
+    }
+
+    /// Inverse of `presetIndex`: the preset id a stored `simple_config_*_index` value refers to.
+    /// Resolves by the explicit catalog `index` (falling back to list position for presets that
+    /// lack one) rather than treating the number as a raw list position. First match wins, keeping
+    /// read-back deterministic for the three displays that share `index: 33` in
+    /// `simple-config-presets.json` — a Resources-side data duplication Swift cannot disambiguate.
+    func id(forPresetIndex index: Int) -> Element.ID? {
+        first { presetIndex(for: $0) == index }?.id
+    }
+}
+
 enum ToolboxFieldSize: Decodable {
     case fixed(Int)
     case variable

@@ -353,6 +353,14 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             guard let self else { return }
             self.configReadWatchdog?.cancel()
             self.configReadWatchdog = nil
+            // The read may already have been settled out from under this JS resolution — by the
+            // stall watchdog, a mid-read disconnect, or a config write that superseded it (see
+            // `writeConfig`). If so, don't let a late (and now stale, pre-write) result overwrite
+            // `config`/state; `finish` has already flipped the state and drained the waiters.
+            guard !didComplete else {
+                self.trace("readConfig JS resolved after the read was already settled; ignoring", level: .info)
+                return
+            }
             switch result {
             case .success(let value):
                 guard let hex = value["hex"] as? String, let bytes = Data(hexString: hex) else {
@@ -441,6 +449,16 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             self?.configWriteWatchdog = nil
             self?.configWriteAckHandler = nil
             self?.isConfigWriteInFlight = false
+            // A successful write is the new on-device truth. PR #19 fires an auto-read on every
+            // connect, so in the Toolbox connect-then-write flow that read is often still in flight
+            // here — settle it against the model we just wrote (state → .loaded, waiters get the
+            // written config) instead of letting its stale pre-write result land afterwards and flip
+            // `config` back. `config` is already set to `model` on the ack/JS paths below; the late
+            // read resolution is then ignored via readConfig's `didComplete` guard.
+            if succeeded, self?.configReadState == .reading {
+                self?.trace("writeConfig superseding the in-flight config read with the written model", level: .info)
+                self?.configReadFinish?(.success(model))
+            }
             completion?(succeeded)
         }
 

@@ -31,12 +31,20 @@ struct ToolboxView: View {
     @State private var writeAfterConnecting = false
     @State private var rebootAfterWrite = false
     @State private var isConfiguring = false
+    /// Set the instant a Configure write succeeds and stays set through the +1s post-write reboot
+    /// window. Used only to word a link drop in that window neutrally instead of as "configuration
+    /// not written" (the device may reset itself after a write, dropping the link legitimately).
+    @State private var writeCompleted = false
     @State private var configureProgress = 0.0
     @State private var statusLog: [StatusEntry] = []
     /// Snapshot of the configuration as last read from / written to the device (or imported).
     /// `hasUnsavedChanges` diffs the live `configuration` against it to gate destructive actions.
     @State private var lastPersistedConfiguration: ToolboxConfiguration?
     @State private var pendingDirtyAction: DirtyAction?
+    /// Set when a Simple-mode build fails so the Configure button can abort *before* writing (a
+    /// failed build must not fall through and write the previously-read configuration) and surface
+    /// the reason to the user rather than burying it in the status log.
+    @State private var configureErrorMessage: String?
 
     // Cached JavaScriptCore-derived outputs. Recomputed only when `configuration` or the active
     // schema changes (see `recomputeDerivedConfiguration`), rather than on every body evaluation —
@@ -66,6 +74,35 @@ struct ToolboxView: View {
     }
 
     var body: some View {
+        // Split from the alert/dialog modifiers below: the full modifier chain (onChange × N,
+        // sheets, importer/exporter, three alerts) otherwise overflows SwiftUI's per-expression
+        // type-check budget. Two properties give the type-checker two smaller expressions.
+        formBody
+            .alert("Reboot device?", isPresented: $showRebootConfirm) {
+                Button("Reboot", role: .destructive) { device?.reboot() }
+                Button("Cancel", role: .cancel) { }
+            }
+            .alert("Configuration not written",
+                   isPresented: Binding(get: { configureErrorMessage != nil },
+                                        set: { if !$0 { configureErrorMessage = nil } })) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(configureErrorMessage ?? "")
+            }
+            .confirmationDialog(
+                "Discard unsaved changes?",
+                isPresented: Binding(get: { pendingDirtyAction != nil },
+                                     set: { if !$0 { pendingDirtyAction = nil } }),
+                presenting: pendingDirtyAction
+            ) { action in
+                Button(action.rawValue, role: .destructive) { perform(action) }
+                Button("Cancel", role: .cancel) { }
+            } message: { _ in
+                Text("The current packet edits have not been written to the device or exported.")
+            }
+    }
+
+    private var formBody: some View {
         Form {
             connectionSection
 
@@ -118,6 +155,14 @@ struct ToolboxView: View {
         // either way.
         .onChange(of: device?.config) { _, config in
             guard let config else { return }
+            // Don't let a *background* config change clobber on-screen state. Two cases matter:
+            // a configure in flight (the connect-then-write flow, where PR #19's connect-time
+            // auto-read of the device's pre-write config would otherwise revert the Simple pickers
+            // and leave a false dirty badge after a successful write — the write path reconciles the
+            // persisted config itself), and unsaved Advanced edits (a reconnect auto-read would
+            // silently discard them). Explicit "Read Toolbox"/initial loads apply the config
+            // directly from `readConfiguration`'s completion, so they still refresh the view.
+            guard !isConfiguring, !hasUnsavedChanges else { return }
             configuration = config.toolbox
             lastPersistedConfiguration = config.toolbox
             syncSimpleSelections()
@@ -130,8 +175,23 @@ struct ToolboxView: View {
             if let error { addLog(error, type: .error) }
         }
         .onChange(of: ble.connectedDevice) { _, connected in
-            guard connected != nil else { return }
-            showConnectionSheet = false
+            if connected != nil { showConnectionSheet = false; return }
+            // The connection ended (didFailToConnect / didDisconnect both clear `connectedDevice`)
+            // before the deferred write could fire. Without this, an armed configure wedges the
+            // view permanently: the connection sheet already auto-dismissed at `didConnect` (so its
+            // `onDismiss` reset never runs), `isConfiguring` keeps the Configure button disabled
+            // forever, and `writeAfterConnecting` stays armed to fire a stale write on any later
+            // reconnect. Disarm and report instead.
+            if writeAfterConnecting || isConfiguring {
+                // A write that already succeeded is only awaiting its post-write reboot; a link drop
+                // in that window is expected (the device can reset itself after a config write) and
+                // must not be reported as a failure after "Configuration written successfully".
+                if writeCompleted {
+                    abortDeferredWrite("Connection ended", type: .info)
+                } else {
+                    abortDeferredWrite("Connection ended — configuration not written")
+                }
+            }
         }
         // `ble.connectedDevice` is set as soon as CoreBluetooth's `didConnect` fires, well before
         // GATT service/characteristic discovery and notifications are set up — writing that early
@@ -139,6 +199,13 @@ struct ToolboxView: View {
         // reaches `.connected` once `CoreBluetoothTransport.onReady` fires, so wait for that instead.
         .onChange(of: device?.connectionState) { _, state in
             ODLog.toolbox.debug("device.connectionState changed to \(String(describing: state), privacy: .public); writeAfterConnecting=\(writeAfterConnecting)")
+            // GATT/discovery can fail without clearing `connectedDevice` (ODDevice moves straight to
+            // `.failed`), so the `connectedDevice`-nil handler above wouldn't catch it — disarm here
+            // too rather than leaving the configure flow stuck at "Preparing configuration…".
+            if writeAfterConnecting, state == .failed {
+                abortDeferredWrite("Connection failed — configuration not written")
+                return
+            }
             guard state == .connected, writeAfterConnecting else { return }
             configureProgress = 0.3
             writeAfterConnecting = false
@@ -177,21 +244,6 @@ struct ToolboxView: View {
         .fileExporter(isPresented: $showExporter, document: exportDocument,
                       contentType: exportContentType, defaultFilename: exportFilename) { result in
             if case .failure(let error) = result { addLog(error.localizedDescription, type: .error) }
-        }
-        .alert("Reboot device?", isPresented: $showRebootConfirm) {
-            Button("Reboot", role: .destructive) { device?.reboot() }
-            Button("Cancel", role: .cancel) { }
-        }
-        .confirmationDialog(
-            "Discard unsaved changes?",
-            isPresented: Binding(get: { pendingDirtyAction != nil },
-                                 set: { if !$0 { pendingDirtyAction = nil } }),
-            presenting: pendingDirtyAction
-        ) { action in
-            Button(action.rawValue, role: .destructive) { perform(action) }
-            Button("Cancel", role: .cancel) { }
-        } message: { _ in
-            Text("The current packet edits have not been written to the device or exported.")
         }
     }
 
@@ -421,8 +473,16 @@ struct ToolboxView: View {
             if mode == .simple {
                 Button {
                     isConfiguring = true
+                    writeCompleted = false
                     configureProgress = 0.1
-                    buildSimpleConfiguration()
+                    // A failed build must abort here — otherwise the flow falls through and writes
+                    // (and reboots into) whatever `configuration` held before the tap, i.e. the
+                    // config previously read from the device, while reporting success.
+                    guard buildSimpleConfiguration() else {
+                        isConfiguring = false
+                        configureProgress = 0
+                        return
+                    }
                     rebootAfterWrite = true
                     if device == nil {
                         writeAfterConnecting = true
@@ -611,6 +671,13 @@ struct ToolboxView: View {
         device.readConfig { result in
             switch result {
             case .success(let model):
+                // Apply directly: this read is user-initiated (Read Toolbox) or the initial load,
+                // so it should refresh the view even when `.onChange(of: device?.config)` would skip
+                // it (unsaved edits / configure in flight). A configure's own connect-time auto-read
+                // has no completion and never reaches here.
+                configuration = model.toolbox
+                lastPersistedConfiguration = model.toolbox
+                syncSimpleSelections()
                 addLog("Configuration read successfully (\(model.toolbox.packets.count) packets)", type: .success)
             case .failure(let error):
                 addLog(error.localizedDescription, type: .error)
@@ -618,8 +685,12 @@ struct ToolboxView: View {
         }
     }
 
-    private func buildSimpleConfiguration() {
-        guard let board = selectedBoard, let display = selectedDisplay, let power = selectedPower else { return }
+    /// Builds the Simple-mode configuration from the current selections. Returns `false` (and
+    /// leaves `configuration` untouched) on failure so the caller can abort the write instead of
+    /// silently sending the previous configuration.
+    @discardableResult
+    private func buildSimpleConfiguration() -> Bool {
+        guard let board = selectedBoard, let display = selectedDisplay, let power = selectedPower else { return false }
         do {
             configuration = try ToolboxConfigRuntime.shared.buildSimple(
                 boardID: board.id,
@@ -630,9 +701,24 @@ struct ToolboxView: View {
                 base: configuration
             )
             addLog("Built \(configuration.packets.count) Toolbox packets from YAML and presets", type: .success)
+            return true
         } catch {
             addLog("Configuration build failed: \(error.localizedDescription)", type: .error)
+            configureErrorMessage = "Could not build the configuration, so nothing was written to the device: \(error.localizedDescription)"
+            return false
         }
+    }
+
+    /// Clears the deferred-write / in-progress-configure state and logs why. Called when a
+    /// connection ends before an armed write can fire, so the UI doesn't wedge with the Configure
+    /// button disabled and a stale write still armed.
+    private func abortDeferredWrite(_ reason: String, type: StatusEntry.EntryType = .error) {
+        writeAfterConnecting = false
+        rebootAfterWrite = false
+        isConfiguring = false
+        configureProgress = 0
+        writeCompleted = false
+        addLog(reason, type: type)
     }
 
     private func writeConfiguration(rebootWhenDone: Bool = false) {
@@ -658,7 +744,12 @@ struct ToolboxView: View {
         device.writeConfig(ODConfigModel(toolbox: written)) { succeeded in
             addLog(succeeded ? "Configuration written successfully" : "Configuration write failed",
                    type: succeeded ? .success : .error)
-            if succeeded { lastPersistedConfiguration = written }
+            if succeeded {
+                lastPersistedConfiguration = written
+                // The write is done; only the +1s reboot below remains. Mark it so a link drop in
+                // that window is worded neutrally rather than contradicting the success line above.
+                writeCompleted = true
+            }
             if succeeded && rebootWhenDone {
                 configureProgress = 0.9
                 addLog("Rebooting device…", type: .info)
@@ -734,9 +825,15 @@ struct ToolboxView: View {
         }
     }
 
-    private func idFromIndex<T: Identifiable>(_ raw: String?, values: [T]) -> T.ID? where T.ID == String {
-        guard let index = parseInteger(raw), index > 0, index <= values.count else { return nil }
-        return values[index - 1].id
+    /// Resolves a stored `simple_config_*_index` back to its preset id by the catalog `index`
+    /// property `build_simple` actually writes — mirroring `presetIndex` in
+    /// `toolbox-config-engine.js`. Interpreting the number as a 1-based list position (the old
+    /// behaviour) mis-maps every preset whose `index` ≠ position — e.g. `ep75-800x480` (position
+    /// 19, index 14) read back as `ep42-400x300` — which then re-writes the wrong panel/pin config
+    /// to real hardware.
+    private func idFromIndex<T: ToolboxIndexedPreset>(_ raw: String?, values: [T]) -> String? {
+        guard let index = parseInteger(raw) else { return nil }
+        return values.id(forPresetIndex: index)
     }
 
     private func applyBoardDefaults() {
