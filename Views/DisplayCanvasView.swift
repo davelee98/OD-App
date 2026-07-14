@@ -16,14 +16,14 @@ struct DisplayCanvasView: View {
     let mode: CanvasMode
 
     // Photo crop transform (persisted by the Composer so it can render the final bitmap).
+    // `pan` is stored **normalized** to the canvas box (fraction of width/height) so it survives a
+    // box resize (rotation / iPad window resize) instead of shifting the crop; `scale` is a pure
+    // zoom multiplier and is already box-independent.
     @Binding var pan: CGSize
     @Binding var scale: CGFloat
-    /// Bumped by the Composer whenever `pan`/`scale` are force-reset from outside a gesture (new
-    /// photo, Reset button, full page reset). Syncs `basePan`/`baseScale` to match so the *next*
-    /// drag/pinch computes its delta from the reset origin instead of a stale pre-reset baseline.
-    var transformResetToken: Int = 0
 
-    // Annotation layers.
+    // Annotation layers. Geometry inside these is stored normalized to the canvas box (see `Stroke`,
+    // `TextItem`, `QRItem`); this view converts to/from view points at the gesture/render boundary.
     @Binding var strokes: [Stroke]
     @Binding var textItems: [TextItem]
     @Binding var qrItems: [QRItem]
@@ -56,21 +56,21 @@ struct DisplayCanvasView: View {
     /// (place / move / resize / delete / duplicate / reorder) — the Composer's undo stack.
     var onCommitUndo: (CanvasSnapshot) -> Void = { _ in }
 
-    // Live drawing + gesture accumulators.
+    // Live drawing + gesture accumulators. Baselines are captured at gesture *start* (not persisted
+    // across gestures or view recreation), so a device rotation that recreates this view can't leave
+    // a stale baseline that snaps the photo on the next drag/pinch.
     @State private var currentStroke: Stroke?
-    @State private var basePan: CGSize = .zero
-    @State private var baseScale: CGFloat = 1
+    @State private var pinchBaseScale: CGFloat?   // photo zoom baseline, captured on the first pinch tick
+    @State private var pinchActive = false        // a magnification is in progress → gate the drag/draw layer
 
     // Selection-drag accumulators. Hit-test happens once on the first onChanged of a drag.
     @State private var dragStarted = false
     @State private var dragTarget: SelectedElement?
-    @State private var dragOrigin: CGPoint?
+    @State private var dragOrigin: CGPoint?       // hit element's start position, in view points
+    @State private var panStart: CGSize?          // photo pan (view points) captured at drag start
     @State private var dragExceededSlop = false
+    @State private var pinchDuringDrag = false    // a pinch preempted this drag → suppress its tap/commit
     @State private var preDragSnapshot: CanvasSnapshot?
-
-    // Pinch-resize accumulators (captured once at the first onChanged of a pinch that has a selection).
-    @State private var resizeSnapshot: CanvasSnapshot?
-    @State private var resizeBaseValue: CGFloat?
 
     /// A tap moves the finger less than this; beyond it the gesture is treated as a drag.
     private let tapSlop: CGFloat = 10
@@ -94,26 +94,25 @@ struct DisplayCanvasView: View {
                         .aspectRatio(contentMode: .fill)
                         .frame(width: box.width, height: box.height)
                         .scaleEffect(scale)
-                        .offset(pan)
+                        .offset(CanvasSpace(box: box).toPoint(size: pan))
                 } else {
                     placeholder
                 }
 
-                strokeCanvas
-                textOverlays
-                qrOverlays
+                strokeCanvas(box: box)
+                textOverlays(box: box)
+                qrOverlays(box: box)
                 interactionLayer(box: box)
                 selectionChrome(box: box)
             }
             .frame(width: box.width, height: box.height)
             .clipped()
             .contentShape(Rectangle())
-            .simultaneousGesture(zoomGesture(box: box))
+            .simultaneousGesture(zoomGesture())
             .border(Color(.systemGray4), width: 1)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear { canvasSize = box }
             .onChange(of: box) { _, newBox in canvasSize = newBox }
-            .onChange(of: transformResetToken) { _, _ in basePan = .zero; baseScale = 1 }
         }
         .aspectRatio(aspectRatio, contentMode: .fit)
     }
@@ -141,41 +140,46 @@ struct DisplayCanvasView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var strokeCanvas: some View {
-        Canvas { ctx, _ in
-            for stroke in strokes { draw(stroke, in: ctx) }
-            if let currentStroke { draw(currentStroke, in: ctx) }
+    private func strokeCanvas(box: CGSize) -> some View {
+        let space = CanvasSpace(box: box)
+        return Canvas { ctx, _ in
+            for stroke in strokes { draw(stroke, in: ctx, space: space) }
+            if let currentStroke { draw(currentStroke, in: ctx, space: space) }
         }
         .allowsHitTesting(false)
     }
 
-    private func draw(_ stroke: Stroke, in ctx: GraphicsContext) {
+    private func draw(_ stroke: Stroke, in ctx: GraphicsContext, space: CanvasSpace) {
         guard stroke.points.count > 1 else { return }
         var path = Path()
-        path.move(to: stroke.points[0])
-        stroke.points.dropFirst().forEach { path.addLine(to: $0) }
+        path.move(to: space.toPoint(stroke.points[0]))
+        stroke.points.dropFirst().forEach { path.addLine(to: space.toPoint($0)) }
         ctx.stroke(path, with: .color(stroke.color),
-                   style: StrokeStyle(lineWidth: stroke.lineWidth, lineCap: .round, lineJoin: .round))
+                   style: StrokeStyle(lineWidth: space.toPoint(length: stroke.lineWidth),
+                                      lineCap: .round, lineJoin: .round))
     }
 
-    private var textOverlays: some View {
-        ForEach(textItems) { item in
+    private func textOverlays(box: CGSize) -> some View {
+        let space = CanvasSpace(box: box)
+        return ForEach(textItems) { item in
             Text(item.text)
-                .font(.system(size: item.fontSize))
+                .font(.system(size: space.toPoint(length: item.fontSize)))
                 .foregroundColor(item.color)
-                .position(item.position)
+                .position(space.toPoint(item.position))
         }
         .allowsHitTesting(false)   // all hit-testing is manual, inside interactionLayer
     }
 
-    private var qrOverlays: some View {
-        ForEach(qrItems) { item in
-            if let qrImg = odGenerateQR(content: item.content, size: item.size, color: item.color) {
+    private func qrOverlays(box: CGSize) -> some View {
+        let space = CanvasSpace(box: box)
+        return ForEach(qrItems) { item in
+            let side = space.toPoint(length: item.size)
+            if let qrImg = odGenerateQR(content: item.content, size: side, color: item.color) {
                 Image(uiImage: qrImg)
                     .resizable()
                     .interpolation(.none)
-                    .frame(width: item.size, height: item.size)
-                    .position(item.position)
+                    .frame(width: side, height: side)
+                    .position(space.toPoint(item.position))
             }
         }
         .allowsHitTesting(false)
@@ -187,20 +191,20 @@ struct DisplayCanvasView: View {
     private func interactionLayer(box: CGSize) -> some View {
         switch mode {
         case .draw:
-            Color.clear.contentShape(Rectangle()).gesture(drawGesture)
+            Color.clear.contentShape(Rectangle()).gesture(drawGesture(box: box))
         case .move, .text, .qr:
             Color.clear.contentShape(Rectangle()).gesture(selectionGesture(box: box))
         }
     }
 
     /// Selection chrome for the currently selected element — a dashed accent border plus corner
-    /// controls: delete (top-right) and a context menu (top-left). Resizing is a pinch gesture on
-    /// the selected element rather than a chrome control (see `zoomGesture`). Sits *above*
+    /// controls: delete (top-right) and a context menu (top-left). Resizing is done with the tool
+    /// panel's size slider (pinch is reserved for photo zoom — see `zoomGesture`). Sits *above*
     /// `interactionLayer` so the real controls win touches over the clear layer below. The rect is
     /// derived by ID lookup each render, so a stale selection (undo/reset) vanishes.
     @ViewBuilder
     private func selectionChrome(box: CGSize) -> some View {
-        if let selection, let rect = frame(of: selection) {
+        if let selection, let rect = frame(of: selection, in: box) {
             RoundedRectangle(cornerRadius: 4)
                 .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
                 .frame(width: rect.width, height: rect.height)
@@ -242,30 +246,37 @@ struct DisplayCanvasView: View {
     // MARK: - Hit-testing (manual)
 
     /// On-screen frame of a text item, centered on its position with a slop inset (UIFont vs SwiftUI
-    /// Text metrics differ slightly).
-    private func frame(ofText item: TextItem) -> CGRect {
-        let size = (item.text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: item.fontSize)])
-        return CGRect(x: item.position.x - size.width / 2, y: item.position.y - size.height / 2,
+    /// Text metrics differ slightly). Element geometry is normalized, so it's denormalized against
+    /// the current box first.
+    private func frame(ofText item: TextItem, in box: CGSize) -> CGRect {
+        let space = CanvasSpace(box: box)
+        let pos = space.toPoint(item.position)
+        let fontSize = space.toPoint(length: item.fontSize)
+        let size = (item.text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: fontSize)])
+        return CGRect(x: pos.x - size.width / 2, y: pos.y - size.height / 2,
                       width: size.width, height: size.height).insetBy(dx: -12, dy: -12)
     }
 
-    private func frame(ofQR item: QRItem) -> CGRect {
-        CGRect(x: item.position.x - item.size / 2, y: item.position.y - item.size / 2,
-               width: item.size, height: item.size).insetBy(dx: -8, dy: -8)
+    private func frame(ofQR item: QRItem, in box: CGSize) -> CGRect {
+        let space = CanvasSpace(box: box)
+        let pos = space.toPoint(item.position)
+        let side = space.toPoint(length: item.size)
+        return CGRect(x: pos.x - side / 2, y: pos.y - side / 2,
+                      width: side, height: side).insetBy(dx: -8, dy: -8)
     }
 
-    private func frame(of selection: SelectedElement) -> CGRect? {
+    private func frame(of selection: SelectedElement, in box: CGSize) -> CGRect? {
         switch selection {
-        case .text(let id): return textItems.first { $0.id == id }.map(frame(ofText:))
-        case .qr(let id):   return qrItems.first { $0.id == id }.map(frame(ofQR:))
+        case .text(let id): return textItems.first { $0.id == id }.map { frame(ofText: $0, in: box) }
+        case .qr(let id):   return qrItems.first { $0.id == id }.map { frame(ofQR: $0, in: box) }
         }
     }
 
-    /// Topmost element under `point`. QR items render above text, and each array is reversed so the
-    /// last-drawn (topmost) item wins.
-    private func hitTest(_ point: CGPoint) -> SelectedElement? {
-        for item in qrItems.reversed() where frame(ofQR: item).contains(point) { return .qr(item.id) }
-        for item in textItems.reversed() where frame(ofText: item).contains(point) { return .text(item.id) }
+    /// Topmost element under `point` (view points). QR items render above text, and each array is
+    /// reversed so the last-drawn (topmost) item wins.
+    private func hitTest(_ point: CGPoint, in box: CGSize) -> SelectedElement? {
+        for item in qrItems.reversed() where frame(ofQR: item, in: box).contains(point) { return .qr(item.id) }
+        for item in textItems.reversed() where frame(ofText: item, in: box).contains(point) { return .text(item.id) }
         return nil
     }
 
@@ -295,17 +306,25 @@ struct DisplayCanvasView: View {
             guard let src = textItems.first(where: { $0.id == id }) else { return }
             onCommitUndo(snapshot())
             let copy = TextItem(text: src.text, fontSize: src.fontSize, color: src.color,
-                                position: clamp(CGPoint(x: src.position.x + 16, y: src.position.y + 16), in: box))
+                                position: offset(src.position, byPoints: 16, in: box))
             textItems.append(copy)
             self.selection = .text(copy.id)
         case .qr(let id):
             guard let src = qrItems.first(where: { $0.id == id }) else { return }
             onCommitUndo(snapshot())
             let copy = QRItem(content: src.content, size: src.size, color: src.color,
-                              position: clamp(CGPoint(x: src.position.x + 16, y: src.position.y + 16), in: box))
+                              position: offset(src.position, byPoints: 16, in: box))
             qrItems.append(copy)
             self.selection = .qr(copy.id)
         }
+    }
+
+    /// Nudge a normalized position by a fixed number of view points, clamped to the box, returning
+    /// the result normalized (used when duplicating so the copy is visibly offset at any box size).
+    private func offset(_ norm: CGPoint, byPoints d: CGFloat, in box: CGSize) -> CGPoint {
+        let space = CanvasSpace(box: box)
+        let p = space.toPoint(norm)
+        return space.toNorm(clamp(CGPoint(x: p.x + d, y: p.y + d), in: box))
     }
 
     /// Move the element to the end of its array — last-drawn wins both rendering and hit-testing.
@@ -323,31 +342,15 @@ struct DisplayCanvasView: View {
         }
     }
 
-    private func sizeValue(of target: SelectedElement) -> CGFloat? {
-        switch target {
-        case .text(let id): return textItems.first { $0.id == id }?.fontSize
-        case .qr(let id):   return qrItems.first { $0.id == id }?.size
-        }
-    }
-
-    private func setSize(of target: SelectedElement, to value: CGFloat, in box: CGSize) {
-        switch target {
-        case .text(let id):
-            guard let i = textItems.firstIndex(where: { $0.id == id }) else { return }
-            textItems[i].fontSize = min(max(value, 8), 200)
-        case .qr(let id):
-            guard let i = qrItems.firstIndex(where: { $0.id == id }) else { return }
-            qrItems[i].size = min(max(value, 24), max(min(box.width, box.height), 24))
-        }
-    }
-
-    private func move(_ target: SelectedElement, to position: CGPoint) {
+    /// Move an element to a new **normalized** position.
+    private func move(_ target: SelectedElement, toNormalized position: CGPoint) {
         switch target {
         case .text(let id): if let i = textItems.firstIndex(where: { $0.id == id }) { textItems[i].position = position }
         case .qr(let id):   if let i = qrItems.firstIndex(where: { $0.id == id }) { qrItems[i].position = position }
         }
     }
 
+    /// The element's current **normalized** position.
     private func originOf(_ target: SelectedElement) -> CGPoint? {
         switch target {
         case .text(let id): return textItems.first { $0.id == id }?.position
@@ -361,47 +364,42 @@ struct DisplayCanvasView: View {
 
     // MARK: - Gestures
 
-    /// Pinch gesture: with an element selected, scales *that element* (font size / QR size) around
-    /// its fixed center — `value` is already a relative scale factor, so resize is just
-    /// `base size × value`. With nothing selected, it zooms the photo as before.
-    private func zoomGesture(box: CGSize) -> some Gesture {
+    /// Pinch gesture: **photo zoom only**. Element resize is done with the tool-panel size sliders,
+    /// so pinch is reserved for framing the photo (per the project's interaction model) and never
+    /// fights the drag/draw layer for element manipulation. `value` is relative to the gesture start
+    /// (begins at 1), and `pinchBaseScale` is captured on the first tick rather than persisted, so a
+    /// rotation that recreates this view can't leave a stale baseline. `pinchActive` gates the
+    /// simultaneous drag/draw layer so a two-finger pinch can't also pan the photo or lay a stroke.
+    private func zoomGesture() -> some Gesture {
         MagnificationGesture()
             .onChanged { value in
-                if let target = selection {
-                    if resizeBaseValue == nil {
-                        resizeSnapshot = snapshot()
-                        resizeBaseValue = sizeValue(of: target)
-                    }
-                    if let base = resizeBaseValue {
-                        setSize(of: target, to: base * value, in: box)
-                    }
-                } else {
-                    scale = max(1, baseScale * value)
-                }
+                pinchActive = true
+                if pinchBaseScale == nil { pinchBaseScale = scale }
+                scale = max(1, (pinchBaseScale ?? scale) * value)
             }
             .onEnded { _ in
-                if selection != nil {
-                    if let snap = resizeSnapshot, snap != snapshot() { onCommitUndo(snap) }
-                    resizeSnapshot = nil
-                    resizeBaseValue = nil
-                } else {
-                    baseScale = scale
-                }
+                pinchBaseScale = nil
+                pinchActive = false
             }
     }
 
-    private var drawGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
+    private func drawGesture(box: CGSize) -> some Gesture {
+        let space = CanvasSpace(box: box)
+        return DragGesture(minimumDistance: 0)
             .onChanged { v in
+                // A concurrent pinch is zooming the photo — abandon any in-progress stroke so the
+                // pinch doesn't also commit a stray line.
+                if pinchActive { currentStroke = nil; return }
+                let p = space.toNorm(v.location)
                 if currentStroke == nil {
                     currentStroke = Stroke(color: color(drawColorIndex),
-                                           lineWidth: drawLineWidth, points: [v.location])
+                                           lineWidth: space.toNorm(length: drawLineWidth), points: [p])
                 } else {
-                    currentStroke?.points.append(v.location)
+                    currentStroke?.points.append(p)
                 }
             }
             .onEnded { _ in
-                if let s = currentStroke, s.points.count > 1 {
+                if !pinchActive, let s = currentStroke, s.points.count > 1 {
                     onCommitUndo(snapshot())
                     strokes.append(s)
                 }
@@ -412,16 +410,33 @@ struct DisplayCanvasView: View {
     /// Unified tap+drag gesture for `.move`/`.text`/`.qr`. A near-stationary gesture is a tap
     /// (select / edit / place / deselect); movement drags the hit element, or pans the photo in
     /// `.move`. Element moves only begin once the finger clears `tapSlop`, so a plain tap never
-    /// nudges the element it selects.
+    /// nudges the element it selects. All geometry works in view points here and is normalized when
+    /// written back. If a pinch preempts the drag, this layer freezes (and its tap/commit is
+    /// suppressed) so zooming the photo never also pans or moves an element.
     private func selectionGesture(box: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 0)
+        let space = CanvasSpace(box: box)
+        return DragGesture(minimumDistance: 0)
             .onChanged { v in
                 if !dragStarted {
-                    // Hit-test the start location exactly once, at the first onChanged.
+                    // Hit-test the start location exactly once, at the first onChanged. Baselines are
+                    // captured here (per-gesture), not persisted across gestures.
                     dragStarted = true
-                    dragTarget = hitTest(v.startLocation)
-                    dragOrigin = dragTarget.flatMap(originOf)
+                    dragTarget = hitTest(v.startLocation, in: box)
+                    dragOrigin = dragTarget.flatMap(originOf).map(space.toPoint)
+                    panStart = space.toPoint(size: pan)
+                    pinchDuringDrag = false
                     if dragTarget != nil { preDragSnapshot = snapshot() }
+                }
+                if pinchActive {
+                    // Pinch took over: hold everything at its gesture-start value so the zoom doesn't
+                    // also drag the element or drift the photo pan.
+                    pinchDuringDrag = true
+                    if let target = dragTarget, let origin = dragOrigin {
+                        move(target, toNormalized: space.toNorm(origin))
+                    } else if mode == .move, let ps = panStart {
+                        pan = space.toNorm(size: ps)
+                    }
+                    return
                 }
                 if let target = dragTarget, let origin = dragOrigin {
                     if !dragExceededSlop,
@@ -429,26 +444,32 @@ struct DisplayCanvasView: View {
                         return   // still within tap territory — don't move yet
                     }
                     dragExceededSlop = true
-                    move(target, to: clamp(CGPoint(x: origin.x + v.translation.width,
-                                                   y: origin.y + v.translation.height), in: box))
-                } else if mode == .move {
-                    pan = CGSize(width: basePan.width + v.translation.width,
-                                 height: basePan.height + v.translation.height)
+                    let moved = clamp(CGPoint(x: origin.x + v.translation.width,
+                                              y: origin.y + v.translation.height), in: box)
+                    move(target, toNormalized: space.toNorm(moved))
+                } else if mode == .move, let ps = panStart {
+                    let moved = CGSize(width: ps.width + v.translation.width,
+                                       height: ps.height + v.translation.height)
+                    pan = space.toNorm(size: moved)
                 }
             }
             .onEnded { v in
-                let isTap = abs(v.translation.width) < tapSlop && abs(v.translation.height) < tapSlop
-                if isTap {
-                    handleTap(at: v.location, in: box)
-                } else if dragTarget != nil {
-                    if dragExceededSlop, let snap = preDragSnapshot { onCommitUndo(snap) }
-                } else if mode == .move {
-                    basePan = pan   // photo pan committed
+                // A pinch preempted this drag: swallow the tap/commit (movement was already reverted).
+                if !pinchDuringDrag {
+                    let isTap = abs(v.translation.width) < tapSlop && abs(v.translation.height) < tapSlop
+                    if isTap {
+                        handleTap(at: v.location, in: box)
+                    } else if dragTarget != nil, dragExceededSlop, let snap = preDragSnapshot {
+                        onCommitUndo(snap)
+                    }
+                    // Photo pan needs no commit (not on the undo stack) and no baseline persist.
                 }
                 dragStarted = false
                 dragTarget = nil
                 dragOrigin = nil
+                panStart = nil
                 dragExceededSlop = false
+                pinchDuringDrag = false
                 preDragSnapshot = nil
             }
     }
@@ -457,24 +478,25 @@ struct DisplayCanvasView: View {
     /// In `.text` mode with nothing selected, empty space places a text item at that location
     /// (the Composer provides the pending text, size, and color).
     private func handleTap(at loc: CGPoint, in box: CGSize) {
+        let space = CanvasSpace(box: box)
         switch mode {
         case .draw:
             break
         case .move:
-            let hit = hitTest(loc)
+            let hit = hitTest(loc, in: box)
             selection = hit
             if let hit { onElementSelected(hit) }
         case .text:
-            if let hit = hitTest(loc) {
+            if let hit = hitTest(loc, in: box) {
                 selection = hit
                 onElementSelected(hit)
             } else if selection != nil {
                 selection = nil
             } else {
-                onPlaceText(loc)
+                onPlaceText(space.toNorm(loc))   // Composer places at this normalized point
             }
         case .qr:
-            if let hit = hitTest(loc) {
+            if let hit = hitTest(loc, in: box) {
                 selection = hit
                 onElementSelected(hit)
             } else if selection != nil {
@@ -483,9 +505,9 @@ struct DisplayCanvasView: View {
                 let content = pendingQRContent.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !content.isEmpty else { return }
                 onCommitUndo(snapshot())
-                let size = min(max(pendingQRSize, 24), max(min(box.width, box.height), 24))
-                let item = QRItem(content: content, size: size,
-                                  color: color(qrColorIndex), position: loc)
+                let sidePoints = min(max(pendingQRSize, 24), max(min(box.width, box.height), 24))
+                let item = QRItem(content: content, size: space.toNorm(length: sidePoints),
+                                  color: color(qrColorIndex), position: space.toNorm(loc))
                 qrItems.append(item)
                 selection = .qr(item.id)
                 onElementSelected(.qr(item.id))
@@ -573,27 +595,34 @@ enum SelectedElement: Equatable {
     case qr(UUID)
 }
 
+// Annotation geometry is stored **normalized** to the canvas box (0…1): positions are fractions of
+// the box (x by width, y by height) and lengths (`lineWidth`, `fontSize`, `size`) are fractions of
+// the box width. This keeps the composition box-independent, so device rotation, an iPad window
+// resize, or a late device-config aspect change preserves both the on-screen layout and the image
+// actually sent to the panel. `CanvasSpace` converts to view points for display/hit-testing;
+// `PanelSpace` maps straight to panel pixels in the composite render.
+
 struct Stroke: Identifiable, Equatable {
     let id = UUID()
     var color: Color
-    var lineWidth: CGFloat
-    var points: [CGPoint]
+    var lineWidth: CGFloat      // normalized to box width
+    var points: [CGPoint]       // normalized to the box
 }
 
 struct TextItem: Identifiable, Equatable {
     let id = UUID()
     var text: String
-    var fontSize: CGFloat
+    var fontSize: CGFloat       // normalized to box width
     var color: Color
-    var position: CGPoint
+    var position: CGPoint       // normalized to the box
 }
 
 struct QRItem: Identifiable, Equatable {
     let id = UUID()
     var content: String
-    var size: CGFloat
+    var size: CGFloat           // normalized to box width
     var color: Color
-    var position: CGPoint
+    var position: CGPoint       // normalized to the box
 }
 
 /// Value snapshot of all annotation layers — one entry in the Composer's undo/redo history.
