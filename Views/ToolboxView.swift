@@ -31,6 +31,10 @@ struct ToolboxView: View {
     @State private var writeAfterConnecting = false
     @State private var rebootAfterWrite = false
     @State private var isConfiguring = false
+    /// Set the instant a Configure write succeeds and stays set through the +1s post-write reboot
+    /// window. Used only to word a link drop in that window neutrally instead of as "configuration
+    /// not written" (the device may reset itself after a write, dropping the link legitimately).
+    @State private var writeCompleted = false
     @State private var configureProgress = 0.0
     @State private var statusLog: [StatusEntry] = []
     /// Snapshot of the configuration as last read from / written to the device (or imported).
@@ -151,6 +155,14 @@ struct ToolboxView: View {
         // either way.
         .onChange(of: device?.config) { _, config in
             guard let config else { return }
+            // Don't let a *background* config change clobber on-screen state. Two cases matter:
+            // a configure in flight (the connect-then-write flow, where PR #19's connect-time
+            // auto-read of the device's pre-write config would otherwise revert the Simple pickers
+            // and leave a false dirty badge after a successful write — the write path reconciles the
+            // persisted config itself), and unsaved Advanced edits (a reconnect auto-read would
+            // silently discard them). Explicit "Read Toolbox"/initial loads apply the config
+            // directly from `readConfiguration`'s completion, so they still refresh the view.
+            guard !isConfiguring, !hasUnsavedChanges else { return }
             configuration = config.toolbox
             lastPersistedConfiguration = config.toolbox
             syncSimpleSelections()
@@ -171,7 +183,14 @@ struct ToolboxView: View {
             // forever, and `writeAfterConnecting` stays armed to fire a stale write on any later
             // reconnect. Disarm and report instead.
             if writeAfterConnecting || isConfiguring {
-                abortDeferredWrite("Connection ended — configuration not written")
+                // A write that already succeeded is only awaiting its post-write reboot; a link drop
+                // in that window is expected (the device can reset itself after a config write) and
+                // must not be reported as a failure after "Configuration written successfully".
+                if writeCompleted {
+                    abortDeferredWrite("Connection ended", type: .info)
+                } else {
+                    abortDeferredWrite("Connection ended — configuration not written")
+                }
             }
         }
         // `ble.connectedDevice` is set as soon as CoreBluetooth's `didConnect` fires, well before
@@ -454,6 +473,7 @@ struct ToolboxView: View {
             if mode == .simple {
                 Button {
                     isConfiguring = true
+                    writeCompleted = false
                     configureProgress = 0.1
                     // A failed build must abort here — otherwise the flow falls through and writes
                     // (and reboots into) whatever `configuration` held before the tap, i.e. the
@@ -651,6 +671,13 @@ struct ToolboxView: View {
         device.readConfig { result in
             switch result {
             case .success(let model):
+                // Apply directly: this read is user-initiated (Read Toolbox) or the initial load,
+                // so it should refresh the view even when `.onChange(of: device?.config)` would skip
+                // it (unsaved edits / configure in flight). A configure's own connect-time auto-read
+                // has no completion and never reaches here.
+                configuration = model.toolbox
+                lastPersistedConfiguration = model.toolbox
+                syncSimpleSelections()
                 addLog("Configuration read successfully (\(model.toolbox.packets.count) packets)", type: .success)
             case .failure(let error):
                 addLog(error.localizedDescription, type: .error)
@@ -685,12 +712,13 @@ struct ToolboxView: View {
     /// Clears the deferred-write / in-progress-configure state and logs why. Called when a
     /// connection ends before an armed write can fire, so the UI doesn't wedge with the Configure
     /// button disabled and a stale write still armed.
-    private func abortDeferredWrite(_ reason: String) {
+    private func abortDeferredWrite(_ reason: String, type: StatusEntry.EntryType = .error) {
         writeAfterConnecting = false
         rebootAfterWrite = false
         isConfiguring = false
         configureProgress = 0
-        addLog(reason, type: .error)
+        writeCompleted = false
+        addLog(reason, type: type)
     }
 
     private func writeConfiguration(rebootWhenDone: Bool = false) {
@@ -716,7 +744,12 @@ struct ToolboxView: View {
         device.writeConfig(ODConfigModel(toolbox: written)) { succeeded in
             addLog(succeeded ? "Configuration written successfully" : "Configuration write failed",
                    type: succeeded ? .success : .error)
-            if succeeded { lastPersistedConfiguration = written }
+            if succeeded {
+                lastPersistedConfiguration = written
+                // The write is done; only the +1s reboot below remains. Mark it so a link drop in
+                // that window is worded neutrally rather than contradicting the success line above.
+                writeCompleted = true
+            }
             if succeeded && rebootWhenDone {
                 configureProgress = 0.9
                 addLog("Rebooting device…", type: .info)
