@@ -403,7 +403,11 @@ struct DiscoveredDevice: Identifiable {
     var isLikelyOpenDisplay: Bool = true   // admission verdict; views filter on it
     var connectionState: ConnectionState = .disconnected
 
-    var name: String { peripheral.name ?? localName ?? "Unknown OD Device" }
+    // localName wins: it's refreshed from the live advertisement every scan, while
+    // peripheral.name is CoreBluetooth-cached and can get stuck on a stale broadcast
+    // name (e.g. "OTA" from a bootloader reboot) after the device resumes advertising
+    // its real name.
+    var name: String { localName ?? peripheral.name ?? "Unknown OD Device" }
 
     var msdHex: String? { msd?.hexString }
 
