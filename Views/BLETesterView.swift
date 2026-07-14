@@ -18,12 +18,7 @@ struct BLETesterView: View {
             logPanel
         }
         .navigationTitle("BLE Tester")
-        .confirmationDialog("Clear the shared BLE log?", isPresented: $showClearConfirm) {
-            Button("Clear Log", role: .destructive) { ble.clearLog() }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("This clears the app-wide log shown here and on the BLE Log screen.")
-        }
+        .clearSharedLogConfirmation(isPresented: $showClearConfirm) { ble.clearLog() }
     }
 
     // MARK: - Command Panel
@@ -118,6 +113,12 @@ struct BLETesterView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
+                    if ble.trimmedCount > 0 {
+                        Text("Older entries were trimmed — showing the most recent \(ble.log.count) of \(ble.log.count + ble.trimmedCount).")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 4)
+                    }
                     ForEach(ble.log) { entry in
                         LogEntryRow(entry: entry)
                             .id(entry.id)
@@ -127,7 +128,10 @@ struct BLETesterView: View {
                 .padding(.vertical, 8)
             }
             .background(Color(.systemGroupedBackground))
-            .onChange(of: ble.log.count) { _, _ in
+            // Observe the last entry's id, not `log.count`: once the 500-entry cap trims on every
+            // append the count is pinned and `onChange(of: count)` would never fire again, freezing
+            // auto-scroll during exactly the busy sessions the Tester exists for.
+            .onChange(of: ble.log.last?.id) { _, _ in
                 if let last = ble.log.last {
                     withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                 }
@@ -195,6 +199,13 @@ struct BLETesterView: View {
 struct LogEntryRow: View {
     let entry: LogEntry
 
+    /// Hoisted so a fresh `DateFormatter` isn't allocated per row on every render.
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss.SSS"
+        return formatter
+    }()
+
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             directionIndicator
@@ -207,7 +218,9 @@ struct LogEntryRow: View {
                             .foregroundStyle(directionColor)
                     }
                     Spacer()
-                    Text(entry.timestamp, style: .time)
+                    // Seconds + milliseconds, matching the export — for BLE debugging (ACK latency,
+                    // watchdog windows, retry gaps) minute precision loses the entire signal.
+                    Text(Self.timeFormatter.string(from: entry.timestamp))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -246,6 +259,21 @@ struct LogEntryRow: View {
         case .sent: Color.blue.opacity(0.05)
         case .received: Color.green.opacity(0.05)
         case .system: Color.orange.opacity(0.07)
+        }
+    }
+}
+
+// MARK: - Shared Clear Confirmation
+
+extension View {
+    /// Confirm-before-clear for the app-wide BLE log, shared by the BLE Tester and the BLE Log
+    /// screen so the two can't drift on whether clearing this shared resource warns first.
+    func clearSharedLogConfirmation(isPresented: Binding<Bool>, clear: @escaping () -> Void) -> some View {
+        confirmationDialog("Clear the shared BLE log?", isPresented: isPresented) {
+            Button("Clear Log", role: .destructive, action: clear)
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This clears the app-wide log shown here and on the BLE Log screen.")
         }
     }
 }

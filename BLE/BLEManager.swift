@@ -103,7 +103,12 @@ final class BLEManager: NSObject, ObservableObject {
 
     func clearLog() {
         log.removeAll()
+        trimmedCount = 0
     }
+
+    /// Count of log entries dropped by the cap over this session. Surfaces a "showing the most
+    /// recent N of M" notice so a trimmed on-screen log (and export) doesn't look complete.
+    @Published private(set) var trimmedCount = 0
 
     /// Cap on retained log entries. The UI only shows the tail, so an unbounded array just leaks
     /// memory during long sessions (image uploads alone add hundreds of entries). Mirrors the
@@ -115,7 +120,9 @@ final class BLEManager: NSObject, ObservableObject {
     func appendLog(_ entry: LogEntry) {
         log.append(entry)
         if log.count > Self.maxLogEntries {
-            log.removeFirst(log.count - Self.maxLogEntries)
+            let overflow = log.count - Self.maxLogEntries
+            log.removeFirst(overflow)
+            trimmedCount += overflow
         }
     }
 

@@ -200,6 +200,10 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         call("sendHex", arguments: ["hex": data.hexString.replacingOccurrences(of: " ", with: "")]) { [weak self] result in
             switch result {
             case .success:
+                // A successful send proves the link is working now, so clear any stale `lastError`.
+                // Both the Tester and BLE Log banners read this same property, so heal them here
+                // rather than letting one past failure pin a red banner for the rest of the session.
+                self?.lastError = nil
                 completion?(.success(()))
             case .failure(let error):
                 // Never silently drop a send failure — surface it like the other command paths do,
@@ -547,6 +551,10 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         uploadStatus = nil
         uploadProgress = 0
         uploadPhase = .sending
+        // One-line notice so the log doesn't look dead while the per-chunk image traffic is hidden.
+        if !BLELogging.detailedPayloads {
+            trace("Image-data (0x0071) chunks are hidden during upload; launch with the detailed-payloads flag to show them.")
+        }
         let modes = config?.transmissionModes ?? 0
 
         let arguments: [String: Any] = [
@@ -715,10 +723,14 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     private func appendLog(direction: LogEntry.Direction, data: Data, label: String?) {
-        // Do not publish or print every image-data chunk. At 4-gray resolution this otherwise
-        // causes hundreds of main-thread log updates. A Debug launch flag can restore them.
+        // Suppress the image-data (0x0071) chunk flood only *during an active upload*, where a real
+        // photo send streams hundreds of chunks and would otherwise cause hundreds of main-thread
+        // log updates. Outside an upload — a Tester send of the "Image Data (0x0071)" preset, its
+        // ACK, or any raw 0x__71 packet — the packet is intentional and must stay visible, so keying
+        // the guard on `uploadPhase == .sending` (not just the opcode) no longer hides the Tester's
+        // own sends. A Debug launch flag still restores every chunk during uploads.
         let isImageChunk = data.count >= 2 && data[1] == 0x71
-        guard BLELogging.detailedPayloads || !isImageChunk else { return }
+        guard BLELogging.detailedPayloads || !(isImageChunk && uploadPhase == .sending) else { return }
         let entry = LogEntry(direction: direction, data: data, label: label)
         let arrow = direction == .sent ? "→" : "←"
         ODLog.ble.debug("\(arrow, privacy: .public) \(label ?? "", privacy: .public) \(data.hexString, privacy: .public)")
