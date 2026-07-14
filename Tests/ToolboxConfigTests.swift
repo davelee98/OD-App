@@ -24,6 +24,62 @@ final class ToolboxConfigTests: XCTestCase {
         XCTAssertTrue(try ToolboxConfigRuntime.shared.validate(decoded).errors.isEmpty)
     }
 
+    // MARK: - Simple-preset index round-trip (write via catalog `index`, read back the same)
+
+    func testDivergentPresetIndexResolvesByCatalogIndexNotListPosition() throws {
+        // Regression for the read-back bug: `simple_config_*_index` is the preset's explicit
+        // catalog `index`, not its list position. `ep75-800x480` sits at list position 19 but
+        // carries `index: 14`; the 14th list entry is a *different* display.
+        let displays = ToolboxResources.catalog.displays
+        let target = try XCTUnwrap(displays.first { $0.id == "ep75-800x480" })
+        let stored = displays.presetIndex(for: target)
+        XCTAssertEqual(stored, 14, "build_simple writes the explicit catalog index")
+        XCTAssertEqual(displays.id(forPresetIndex: stored), "ep75-800x480",
+                       "read-back must resolve 14 → ep75-800x480")
+        XCTAssertEqual(displays[stored - 1].id, "ep42-400x300",
+                       "guards the bug: the old list-position lookup returned the wrong display")
+    }
+
+    func testEverySimplePresetRoundTripsThroughItsCatalogIndex() throws {
+        let catalog = ToolboxResources.catalog
+        func check<T: ToolboxIndexedPreset>(_ values: [T], _ label: String) throws {
+            for item in values {
+                let stored = values.presetIndex(for: item)
+                let resolved = try XCTUnwrap(values.id(forPresetIndex: stored),
+                                             "\(label) \(item.id) (index \(stored)) resolved to nil")
+                // Duplicate catalog indexes (three displays share `index: 33`, a Resources-side
+                // data issue) can only round-trip to the first match — but the resolved preset must
+                // still carry the same stored index, i.e. the mapping is a consistent inverse.
+                let resolvedItem = try XCTUnwrap(values.first { $0.id == resolved })
+                XCTAssertEqual(values.presetIndex(for: resolvedItem), stored,
+                               "\(label) index \(stored) resolved to \(resolved) with a different index")
+            }
+        }
+        try check(catalog.driverBoards, "board")
+        try check(catalog.displays, "display")
+        try check(catalog.powerOptions, "power")
+    }
+
+    func testBuildSimpleWritesCatalogIndexReadableBackToTheSameDisplay() throws {
+        // End-to-end through the real JS engine: build for a board+display whose indexes differ
+        // from their list positions, then confirm the stored index reads back to the same ids.
+        let catalog = ToolboxResources.catalog
+        let configuration = try ToolboxConfigRuntime.shared.buildSimple(
+            boardID: "esp32-s3-wspp",     // list position 19, catalog index 18
+            displayID: "ep75-800x480",    // list position 19, catalog index 14
+            powerID: "battery-2000",
+            deepSleepSeconds: 0,
+            encryptionKey: nil
+        )
+        let manufacturer = try XCTUnwrap(configuration.packets.first { $0.packetType == 2 })
+        let storedBoard = try XCTUnwrap(Int(manufacturer.fields["simple_config_driver_index"] ?? ""))
+        let storedDisplay = try XCTUnwrap(Int(manufacturer.fields["simple_config_display_index"] ?? ""))
+        XCTAssertEqual(storedBoard, 18)
+        XCTAssertEqual(storedDisplay, 14)
+        XCTAssertEqual(catalog.driverBoards.id(forPresetIndex: storedBoard), "esp32-s3-wspp")
+        XCTAssertEqual(catalog.displays.id(forPresetIndex: storedDisplay), "ep75-800x480")
+    }
+
     func testDuplicateRepeatInstanceIsRejected() throws {
         var configuration = try ToolboxConfigRuntime.shared.buildSimple(
             boardID: "reterminal-e1001",
