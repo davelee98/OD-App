@@ -115,4 +115,117 @@ final class CanvasCoordinateTests: XCTestCase {
             XCTAssertEqual(offset.height, panPoints.height * k, accuracy: 1e-6)
         }
     }
+
+    // MARK: - Photo fit-mode layout (display ↔ render lockstep)
+
+    // A panel-sized "render" container and a couple of source-image shapes (landscape / portrait vs
+    // the 800×480 panel) to exercise which edge the fit picks.
+    private var panelContainer: CGSize { CGSize(width: panel.w, height: panel.h) }
+    private let wideImage = CGSize(width: 4000, height: 1000)   // wider than the panel
+    private let tallImage = CGSize(width: 1000, height: 3000)   // taller than the panel
+
+    /// Cover reproduces the legacy aspect-fill math (`s0 = max(...)`, uniform, centered + pan).
+    func testCoverMatchesLegacyFillMath() {
+        let pan = CGSize(width: 0.1, height: -0.05), scale: CGFloat = 1.3
+        for img in [wideImage, tallImage] {
+            let c = panelContainer
+            let s0 = max(c.width / img.width, c.height / img.height)
+            let drawW = img.width * s0 * scale, drawH = img.height * s0 * scale
+            let expected = CGRect(x: (c.width - drawW) / 2 + pan.width * c.width,
+                                  y: (c.height - drawH) / 2 + pan.height * c.height,
+                                  width: drawW, height: drawH)
+            let rect = PhotoLayout.drawRect(container: c, imageSize: img, fitMode: .cover,
+                                            scale: scale, pan: pan)
+            assertRectEqual(rect, expected)
+        }
+    }
+
+    /// Cover fully covers the box at the baseline (no white gaps): both edges ≥ the container, one ==.
+    func testCoverFillsBoxAtBaseline() {
+        for img in [wideImage, tallImage] {
+            let c = panelContainer
+            let rect = PhotoLayout.drawRect(container: c, imageSize: img, fitMode: .cover,
+                                            scale: 1, pan: .zero)
+            XCTAssertGreaterThanOrEqual(rect.width, c.width - 1e-6)
+            XCTAssertGreaterThanOrEqual(rect.height, c.height - 1e-6)
+            XCTAssertTrue(abs(rect.width - c.width) < 1e-6 || abs(rect.height - c.height) < 1e-6)
+            assertAspectPreserved(rect, img)
+        }
+    }
+
+    /// Contain fits the whole photo inside the box at the baseline (both edges ≤ container, one ==),
+    /// with the photo's aspect ratio preserved.
+    func testContainFitsInsideBox() {
+        for img in [wideImage, tallImage] {
+            let c = panelContainer
+            let rect = PhotoLayout.drawRect(container: c, imageSize: img, fitMode: .contain,
+                                            scale: 1, pan: .zero)
+            XCTAssertLessThanOrEqual(rect.width, c.width + 1e-6)
+            XCTAssertLessThanOrEqual(rect.height, c.height + 1e-6)
+            XCTAssertTrue(abs(rect.width - c.width) < 1e-6 || abs(rect.height - c.height) < 1e-6)
+            assertAspectPreserved(rect, img)
+        }
+    }
+
+    /// Stretch fills the box exactly at the baseline, ignoring the photo's aspect ratio.
+    func testStretchFillsBoxExactly() {
+        let c = panelContainer
+        for img in [wideImage, tallImage] {
+            let rect = PhotoLayout.drawRect(container: c, imageSize: img, fitMode: .stretch,
+                                            scale: 1, pan: .zero)
+            XCTAssertEqual(rect.origin.x, 0, accuracy: 1e-6)
+            XCTAssertEqual(rect.origin.y, 0, accuracy: 1e-6)
+            XCTAssertEqual(rect.width, c.width, accuracy: 1e-6)
+            XCTAssertEqual(rect.height, c.height, accuracy: 1e-6)
+        }
+    }
+
+    /// The heart of the invariant: the on-screen box (points) and the render panel (pixels) produce a
+    /// *proportionally identical* rect for every fit mode — so what the user frames is what is sent.
+    /// Normalizing each rect by its own container must give the same result at both resolutions.
+    func testDisplayAndRenderStayInLockstep() {
+        let panelC = panelContainer
+        for box in boxes {                                   // on-screen boxes keep the panel aspect
+            for mode in PhotoFitMode.allCases {
+                for img in [wideImage, tallImage] {
+                    for (scale, pan) in [(CGFloat(1), CGSize.zero),
+                                         (CGFloat(0.4), CGSize(width: -0.2, height: 0.15)),
+                                         (CGFloat(2.5), CGSize(width: 0.1, height: -0.3))] {
+                        let display = PhotoLayout.drawRect(container: box, imageSize: img,
+                                                           fitMode: mode, scale: scale, pan: pan)
+                        let render = PhotoLayout.drawRect(container: panelC, imageSize: img,
+                                                          fitMode: mode, scale: scale, pan: pan)
+                        // rect / container is resolution-independent, so the two must match.
+                        XCTAssertEqual(display.minX / box.width, render.minX / panelC.width, accuracy: 1e-6)
+                        XCTAssertEqual(display.minY / box.height, render.minY / panelC.height, accuracy: 1e-6)
+                        XCTAssertEqual(display.width / box.width, render.width / panelC.width, accuracy: 1e-6)
+                        XCTAssertEqual(display.height / box.height, render.height / panelC.height, accuracy: 1e-6)
+                    }
+                }
+            }
+        }
+    }
+
+    /// A degenerate (zero-size) image yields an empty rect rather than a NaN/inf divide.
+    func testZeroImageSizeIsSafe() {
+        let rect = PhotoLayout.drawRect(container: panelContainer, imageSize: .zero,
+                                        fitMode: .cover, scale: 1, pan: .zero)
+        XCTAssertEqual(rect, .zero)
+    }
+
+    // MARK: - Helpers
+
+    private func assertRectEqual(_ a: CGRect, _ b: CGRect, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(a.origin.x, b.origin.x, accuracy: 1e-6, file: file, line: line)
+        XCTAssertEqual(a.origin.y, b.origin.y, accuracy: 1e-6, file: file, line: line)
+        XCTAssertEqual(a.width, b.width, accuracy: 1e-6, file: file, line: line)
+        XCTAssertEqual(a.height, b.height, accuracy: 1e-6, file: file, line: line)
+    }
+
+    /// The rect scales the source image uniformly (same factor on both axes → aspect preserved).
+    private func assertAspectPreserved(_ rect: CGRect, _ img: CGSize,
+                                       file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(rect.width / img.width, rect.height / img.height, accuracy: 1e-6,
+                       file: file, line: line)
+    }
 }

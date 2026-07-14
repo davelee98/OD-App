@@ -21,6 +21,9 @@ struct DisplayCanvasView: View {
     // zoom multiplier and is already box-independent.
     @Binding var pan: CGSize
     @Binding var scale: CGFloat
+    /// How the photo is mapped onto the canvas before `scale`/`pan` (Cover / Contain / Stretch).
+    /// The panel's fit-mode buttons own this; the canvas only reads it to lay out the photo.
+    var fitMode: PhotoFitMode = .cover
 
     // Annotation layers. Geometry inside these is stored normalized to the canvas box (see `Stroke`,
     // `TextItem`, `QRItem`); this view converts to/from view points at the gesture/render boundary.
@@ -75,6 +78,10 @@ struct DisplayCanvasView: View {
     /// A tap moves the finger less than this; beyond it the gesture is treated as a drag.
     private let tapSlop: CGFloat = 10
 
+    /// Lower bound for pinch zoom. Below the fit-mode baseline (`< 1`) the photo shrinks smaller than
+    /// the canvas, revealing the white background around it; this floor stops it collapsing to a dot.
+    static let minPhotoScale: CGFloat = 0.2
+
     private var aspectRatio: CGFloat {
         guard displaySize.height > 0 else { return 1 }
         return displaySize.width / displaySize.height
@@ -89,12 +96,17 @@ struct DisplayCanvasView: View {
                 Color.white
 
                 if let image {
+                    // Draw size/position come straight from the shared `PhotoLayout` (same formula
+                    // the composite render uses), so on-screen framing == the rasterized bitmap for
+                    // every fit mode + zoom + pan. `.resizable()` with no aspectRatio fills the
+                    // computed rect: uniform for Cover/Contain (the rect keeps the photo's aspect),
+                    // non-uniform for Stretch (the rect deliberately doesn't).
+                    let rect = PhotoLayout.drawRect(container: box, imageSize: image.size,
+                                                    fitMode: fitMode, scale: scale, pan: pan)
                     Image(uiImage: image)
                         .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: box.width, height: box.height)
-                        .scaleEffect(scale)
-                        .offset(CanvasSpace(box: box).toPoint(size: pan))
+                        .frame(width: rect.width, height: rect.height)
+                        .position(x: rect.midX, y: rect.midY)
                 } else {
                     placeholder
                 }
@@ -375,7 +387,8 @@ struct DisplayCanvasView: View {
             .onChanged { value in
                 pinchActive = true
                 if pinchBaseScale == nil { pinchBaseScale = scale }
-                scale = max(1, (pinchBaseScale ?? scale) * value)
+                // Floor at `minPhotoScale` (not 1) so the user can shrink the photo below canvas size.
+                scale = max(Self.minPhotoScale, (pinchBaseScale ?? scale) * value)
             }
             .onEnded { _ in
                 pinchBaseScale = nil
