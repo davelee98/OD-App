@@ -64,6 +64,9 @@ struct ComposerView: View {
     /// gesture baselines at gesture start, so no reset token is needed to keep them in sync.
     @State private var pan: CGSize = .zero
     @State private var scale: CGFloat = 1
+    /// How the photo maps onto the canvas before `scale`/`pan` (Cover = aspect-fill default). Part of
+    /// the photo transform, so it resets alongside `pan`/`scale` and is *not* on the undo stack.
+    @State private var fitMode: PhotoFitMode = .cover
 
     // Annotations.
     @State private var activeTool: ComposerTool = .photo
@@ -256,7 +259,7 @@ struct ComposerView: View {
             displaySize: displaySize,
             palette: schemePaletteColors,
             mode: mode,
-            pan: $pan, scale: $scale,
+            pan: $pan, scale: $scale, fitMode: fitMode,
             strokes: $strokes, textItems: $textItems, qrItems: $qrItems,
             canvasSize: $canvasSize,
             selection: $selection,
@@ -413,6 +416,8 @@ struct ComposerView: View {
             }
             .buttonStyle(.bordered)
 
+            fitModeControls
+
             HStack {
                 Label("Pinch to zoom · drag to reposition", systemImage: "hand.draw")
                     .font(.caption).foregroundStyle(.secondary)
@@ -420,6 +425,33 @@ struct ComposerView: View {
                 Button("Reset") { resetToOriginalState() }
                     .font(.caption).buttonStyle(.bordered)
                     .disabled(isAtOriginalState)
+            }
+        }
+    }
+
+    /// Fit-mode row: how the photo maps onto the canvas. The leading button reverts the whole photo
+    /// transform to the default (Cover, 1×, no pan); the three mode buttons pick a fit and — because
+    /// each mode is a clean baseline — clear any zoom/pan layered on top. The active mode is tinted.
+    private var fitModeControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Fit").font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Button { revertPhotoToDefault() } label: {
+                    Image(systemName: "arrow.counterclockwise").font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .disabled(isPhotoTransformDefault)
+                .accessibilityLabel("Revert to default")
+
+                ForEach(PhotoFitMode.allCases) { m in
+                    Button { setFitMode(m) } label: {
+                        Text(m.title)
+                            .font(.caption).lineLimit(1)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(fitMode == m ? .accentColor : Color(.systemGray))
+                }
             }
         }
     }
@@ -893,7 +925,27 @@ struct ComposerView: View {
     /// after opening the Composer — i.e. nothing left for the Photo panel's "Reset" to undo.
     /// Deliberately excludes the photo itself and annotations, which are `resetPage()`'s job.
     private var isAtOriginalState: Bool {
-        pan == .zero && scale == 1 && adjustments.isNeutral && !useMeasuredPalette && !ditheringOverridden
+        isPhotoTransformDefault && adjustments.isNeutral && !useMeasuredPalette && !ditheringOverridden
+    }
+
+    /// Whether the photo transform (fit mode + zoom + pan) is at its default framing — used to gate
+    /// the "revert to default" fit button.
+    private var isPhotoTransformDefault: Bool {
+        fitMode == .cover && scale == 1 && pan == .zero
+    }
+
+    /// Switch the photo fit mode. Each mode defines a clean framing baseline, so any zoom/pan layered
+    /// on top is cleared — keeping a stale transform would misframe the new baseline. Like `pan`/`scale`,
+    /// the fit mode is not on the undo stack.
+    private func setFitMode(_ mode: PhotoFitMode) {
+        fitMode = mode
+        scale = 1
+        pan = .zero
+    }
+
+    /// Reset the photo transform completely: Cover fit at 1× with no pan.
+    private func revertPhotoToDefault() {
+        setFitMode(.cover)
     }
 
     /// Restores the photo transform and processing settings (crop, adjustments, tone compression,
@@ -901,7 +953,7 @@ struct ComposerView: View {
     /// session — the smart dithering default for the current scheme, same as on first load. Leaves
     /// the chosen photo and annotations untouched (that's the separate, destructive "Reset Page").
     private func resetToOriginalState() {
-        pan = .zero; scale = 1
+        pan = .zero; scale = 1; fitMode = .cover
         adjustments = .neutral
         useMeasuredPalette = false
         ditheringOverridden = false
@@ -940,7 +992,7 @@ struct ComposerView: View {
             DispatchQueue.main.async {
                 self.baseImage = normalized
                 self.previewBase = preview
-                self.pan = .zero; self.scale = 1
+                self.pan = .zero; self.scale = 1; self.fitMode = .cover
                 self.refreshCanvasImage()
             }
         }
@@ -973,7 +1025,7 @@ struct ComposerView: View {
     private func resetPage() {
         // Photo + crop transform.
         baseImage = nil; previewBase = nil; canvasImage = nil; photoItem = nil
-        pan = .zero; scale = 1
+        pan = .zero; scale = 1; fitMode = .cover
 
         // Annotations.
         activeTool = .photo
@@ -1144,6 +1196,7 @@ struct ComposerView: View {
         let adjustments: ImageAdjustments
         let scale: CGFloat
         let pan: CGSize
+        let fitMode: PhotoFitMode
         let strokes: [Stroke]
         let textItems: [TextItem]
         let qrItems: [QRItem]
@@ -1152,6 +1205,7 @@ struct ComposerView: View {
     private func compositeSnapshot() -> CompositeSnapshot {
         CompositeSnapshot(width: displayWidth, height: displayHeight,
                           baseImage: baseImage, adjustments: adjustments, scale: scale, pan: pan,
+                          fitMode: fitMode,
                           strokes: strokes, textItems: textItems, qrItems: qrItems)
     }
 
@@ -1168,18 +1222,17 @@ struct ComposerView: View {
             UIColor.white.setFill()
             UIRectFill(CGRect(x: 0, y: 0, width: w, height: h))
 
-            // Photo: same aspect-fill + zoom + pan transform used on screen, computed in pixels.
+            // Photo: same fit-mode + zoom + pan transform used on screen, computed in panel pixels.
+            // `PhotoLayout.drawRect` is the shared formula `DisplayCanvasView` lays the photo out
+            // with, so this rasterization matches the on-screen framing exactly for every fit mode.
             if let base = s.baseImage {
                 let img = ImageProcessor.adjust(base, adjustments: s.adjustments)
                 let imgSize = img.size
                 if imgSize.width > 0, imgSize.height > 0 {
-                    let s0 = max(wf / imgSize.width, hf / imgSize.height)
-                    let scl = s0 * s.scale
-                    let drawW = imgSize.width * scl
-                    let drawH = imgSize.height * scl
-                    let x = (wf - drawW) / 2 + s.pan.width * wf
-                    let y = (hf - drawH) / 2 + s.pan.height * hf
-                    img.draw(in: CGRect(x: x, y: y, width: drawW, height: drawH))
+                    let rect = PhotoLayout.drawRect(container: CGSize(width: wf, height: hf),
+                                                    imageSize: imgSize, fitMode: s.fitMode,
+                                                    scale: s.scale, pan: s.pan)
+                    img.draw(in: rect)
                 }
             }
 
