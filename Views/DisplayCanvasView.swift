@@ -62,6 +62,7 @@ struct DisplayCanvasView: View {
     @State private var currentStroke: Stroke?
     @State private var pinchBaseScale: CGFloat?   // photo zoom baseline, captured on the first pinch tick
     @State private var pinchActive = false        // a magnification is in progress → gate the drag/draw layer
+    @State private var pinchDuringDraw = false    // a pinch preempted this draw → decline strokes for the rest of the touch
 
     // Selection-drag accumulators. Hit-test happens once on the first onChanged of a drag.
     @State private var dragStarted = false
@@ -387,9 +388,11 @@ struct DisplayCanvasView: View {
         let space = CanvasSpace(box: box)
         return DragGesture(minimumDistance: 0)
             .onChanged { v in
-                // A concurrent pinch is zooming the photo — abandon any in-progress stroke so the
-                // pinch doesn't also commit a stray line.
-                if pinchActive { currentStroke = nil; return }
+                // A pinch is zooming the photo — or has, earlier in this touch. Abandon any
+                // in-progress stroke and stay disabled for the sequence's remainder: the surviving
+                // finger keeps this DragGesture alive after the magnification ends, and letting it
+                // resume would lay (and commit) a stray line. `pinchDuringDraw` makes the freeze sticky.
+                if pinchActive || pinchDuringDraw { pinchDuringDraw = true; currentStroke = nil; return }
                 let p = space.toNorm(v.location)
                 if currentStroke == nil {
                     currentStroke = Stroke(color: color(drawColorIndex),
@@ -399,11 +402,12 @@ struct DisplayCanvasView: View {
                 }
             }
             .onEnded { _ in
-                if !pinchActive, let s = currentStroke, s.points.count > 1 {
+                if !pinchActive, !pinchDuringDraw, let s = currentStroke, s.points.count > 1 {
                     onCommitUndo(snapshot())
                     strokes.append(s)
                 }
                 currentStroke = nil
+                pinchDuringDraw = false   // reset the sticky freeze for the next touch sequence
             }
     }
 
@@ -427,9 +431,13 @@ struct DisplayCanvasView: View {
                     pinchDuringDrag = false
                     if dragTarget != nil { preDragSnapshot = snapshot() }
                 }
-                if pinchActive {
-                    // Pinch took over: hold everything at its gesture-start value so the zoom doesn't
-                    // also drag the element or drift the photo pan.
+                if pinchActive || pinchDuringDrag {
+                    // Pinch took over — or did earlier in this touch. Hold everything at its
+                    // gesture-start value so the zoom doesn't also drag the element or drift the pan,
+                    // and keep holding for the sequence's remainder: the surviving finger keeps this
+                    // DragGesture alive after the magnification ends, and its translation now carries
+                    // the pinch's motion, so resuming would jump. `pinchDuringDrag` makes it sticky
+                    // (onEnded still swallows the tap/commit).
                     pinchDuringDrag = true
                     if let target = dragTarget, let origin = dragOrigin {
                         move(target, toNormalized: space.toNorm(origin))
