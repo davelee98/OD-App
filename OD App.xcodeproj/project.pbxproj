@@ -31,6 +31,8 @@
 		010000000000000000000040 /* DisplayDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000040 /* DisplayDevice.swift */; };
 		010000000000000000000041 /* DisplayCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000041 /* DisplayCanvasView.swift */; };
 		010000000000000000000042 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000042 /* ComposerView.swift */; };
+		0100000000000000000000B0 /* CanvasCoordinates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000B0 /* CanvasCoordinates.swift */; };
+		0100000000000000000000B1 /* CanvasCoordinateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000B1 /* CanvasCoordinateTests.swift */; };
 		010000000000000000000044 /* AdvancedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000044 /* AdvancedView.swift */; };
 		010000000000000000000045 /* CoreBluetoothTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000045 /* CoreBluetoothTransport.swift */; };
 		010000000000000000000046 /* OpenDisplayJSRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000046 /* OpenDisplayJSRuntime.swift */; };
@@ -93,6 +95,8 @@
 		020000000000000000000040 /* DisplayDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayDevice.swift; sourceTree = "<group>"; };
 		020000000000000000000041 /* DisplayCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayCanvasView.swift; sourceTree = "<group>"; };
 		020000000000000000000042 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
+		0200000000000000000000B0 /* CanvasCoordinates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasCoordinates.swift; sourceTree = "<group>"; };
+		0200000000000000000000B1 /* CanvasCoordinateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasCoordinateTests.swift; sourceTree = "<group>"; };
 		020000000000000000000044 /* AdvancedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedView.swift; sourceTree = "<group>"; };
 		020000000000000000000045 /* CoreBluetoothTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBluetoothTransport.swift; sourceTree = "<group>"; };
 		020000000000000000000046 /* OpenDisplayJSRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenDisplayJSRuntime.swift; sourceTree = "<group>"; };
@@ -210,6 +214,7 @@
 			isa = PBXGroup;
 			children = (
 				020000000000000000000040 /* DisplayDevice.swift */,
+				0200000000000000000000B0 /* CanvasCoordinates.swift */,
 				02000000000000000000000E /* ConfigModel.swift */,
 				02000000000000000000000F /* DevicePreset.swift */,
 				020000000000000000000021 /* ImageProcessor.swift */,
@@ -264,6 +269,7 @@
 				0200000000000000000000A0 /* ToneCompressionTests.swift */,
 				0200000000000000000000A1 /* ODDeviceAdmissionTests.swift */,
 				0200000000000000000000A4 /* BLEChunkSizeTests.swift */,
+				0200000000000000000000B1 /* CanvasCoordinateTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -403,6 +409,7 @@
 				010000000000000000000040 /* DisplayDevice.swift in Sources */,
 				010000000000000000000041 /* DisplayCanvasView.swift in Sources */,
 				010000000000000000000042 /* ComposerView.swift in Sources */,
+				0100000000000000000000B0 /* CanvasCoordinates.swift in Sources */,
 				010000000000000000000044 /* AdvancedView.swift in Sources */,
 				010000000000000000000002 /* ContentView.swift in Sources */,
 				010000000000000000000003 /* BLEManager.swift in Sources */,
@@ -439,6 +446,7 @@
 				0100000000000000000000A0 /* ToneCompressionTests.swift in Sources */,
 				0100000000000000000000A1 /* ODDeviceAdmissionTests.swift in Sources */,
 				0100000000000000000000A4 /* BLEChunkSizeTests.swift in Sources */,
+				0100000000000000000000B1 /* CanvasCoordinateTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -575,7 +583,6 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
-				DEVELOPMENT_TEAM = GUYFAK8DC6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
@@ -600,7 +607,6 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
-				DEVELOPMENT_TEAM = GUYFAK8DC6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;

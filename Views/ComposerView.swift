@@ -58,13 +58,12 @@ struct ComposerView: View {
     @State private var previewBase: UIImage?    // downscaled copy of baseImage, adjusted live for the canvas
     @State private var canvasImage: UIImage?    // exposure-adjusted copy shown on the canvas
     @State private var canvasRenderToken = 0    // drops stale async adjustment results from a fast slider drag
+    /// Photo crop transform. `pan` is stored **normalized** to the canvas box (a fraction of
+    /// width/height) so rotating the device or resizing an iPad window preserves the crop instead of
+    /// shifting it; `scale` is a box-independent zoom multiplier. `DisplayCanvasView` captures its
+    /// gesture baselines at gesture start, so no reset token is needed to keep them in sync.
     @State private var pan: CGSize = .zero
     @State private var scale: CGFloat = 1
-    /// Bumped whenever `pan`/`scale` are force-reset from outside a gesture (new photo, Reset
-    /// button, full page reset) — tells `DisplayCanvasView` to also drop its internal gesture
-    /// baselines (`basePan`/`baseScale`), which otherwise stay stale and make the *next* drag or
-    /// pinch jump using an outdated reference point.
-    @State private var transformResetToken = 0
 
     // Annotations.
     @State private var activeTool: ComposerTool = .photo
@@ -257,7 +256,7 @@ struct ComposerView: View {
             displaySize: displaySize,
             palette: schemePaletteColors,
             mode: mode,
-            pan: $pan, scale: $scale, transformResetToken: transformResetToken,
+            pan: $pan, scale: $scale,
             strokes: $strokes, textItems: $textItems, qrItems: $qrItems,
             canvasSize: $canvasSize,
             selection: $selection,
@@ -441,7 +440,7 @@ struct ComposerView: View {
     private var textPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let id = selectedTextID {
-                Text("Drag to move · pinch to resize")
+                Text("Drag to move · slider to resize")
                     .font(.caption).foregroundStyle(.secondary)
                 TextField("Text", text: textContentBinding(for: id))
                     .textFieldStyle(.roundedBorder)
@@ -450,7 +449,7 @@ struct ComposerView: View {
                     Slider(value: textSizeBinding(for: id), in: 8...200, step: 2) { editing in
                         if editing { pushUndo() }
                     }
-                    Text("\(Int(textItems.first(where: { $0.id == id })?.fontSize ?? 0))pt")
+                    Text("\(Int(pointSize(textItems.first(where: { $0.id == id })?.fontSize ?? 0)))pt")
                         .font(.caption).frame(width: 44)
                 }
                 colorSwatchPicker(selection: textColorBinding(for: id, pushesUndo: true))
@@ -472,7 +471,7 @@ struct ComposerView: View {
     private var qrPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let id = selectedQRID {
-                Text("Editing the selected QR code · pinch to resize")
+                Text("Editing the selected QR code · slider to resize")
                     .font(.caption).foregroundStyle(.secondary)
                 TextField("QR content (URL or text)", text: qrContentBinding(for: id))
                     .textFieldStyle(.roundedBorder)
@@ -483,7 +482,7 @@ struct ComposerView: View {
                     Slider(value: qrSizeBinding(for: id), in: 40...300, step: 2) { editing in
                         if editing { pushUndo() }
                     }
-                    Text("\(Int(qrItems.first(where: { $0.id == id })?.size ?? 0))pt")
+                    Text("\(Int(pointSize(qrItems.first(where: { $0.id == id })?.size ?? 0)))pt")
                         .font(.caption).frame(width: 44)
                 }
                 colorSwatchPicker(selection: qrColorBinding(for: id))
@@ -540,6 +539,15 @@ struct ComposerView: View {
 
     // MARK: - Selected-element inspector bindings
 
+    /// Live canvas coordinate space. Annotation sizes are stored normalized to the box; the size
+    /// sliders present and edit them as view **points** (relative to the current box), so they keep
+    /// their familiar point ranges and "pt" readouts.
+    private var canvasSpace: CanvasSpace { CanvasSpace(box: canvasSize) }
+    /// Point value of a normalized length for display (falls back to the raw value pre-layout).
+    private func pointSize(_ norm: CGFloat) -> CGFloat {
+        canvasSize.width > 0 ? canvasSpace.toPoint(length: norm) : norm
+    }
+
     private var selectedTextID: UUID? {
         if case .text(let id) = selection { return id }
         return nil
@@ -552,9 +560,14 @@ struct ComposerView: View {
 
     private func textSizeBinding(for id: UUID) -> Binding<CGFloat> {
         Binding(
-            get: { textItems.first(where: { $0.id == id })?.fontSize ?? pendingTextSize },
+            get: {
+                guard let f = textItems.first(where: { $0.id == id })?.fontSize else { return pendingTextSize }
+                return pointSize(f)
+            },
             set: { newValue in
-                if let i = textItems.firstIndex(where: { $0.id == id }) { textItems[i].fontSize = newValue }
+                if let i = textItems.firstIndex(where: { $0.id == id }) {
+                    textItems[i].fontSize = canvasSpace.toNorm(length: newValue)
+                }
             }
         )
     }
@@ -591,9 +604,14 @@ struct ComposerView: View {
 
     private func qrSizeBinding(for id: UUID) -> Binding<CGFloat> {
         Binding(
-            get: { qrItems.first(where: { $0.id == id })?.size ?? pendingQRSize },
+            get: {
+                guard let s = qrItems.first(where: { $0.id == id })?.size else { return pendingQRSize }
+                return pointSize(s)
+            },
             set: { newValue in
-                if let i = qrItems.firstIndex(where: { $0.id == id }) { qrItems[i].size = newValue }
+                if let i = qrItems.firstIndex(where: { $0.id == id }) {
+                    qrItems[i].size = canvasSpace.toNorm(length: newValue)
+                }
             }
         )
     }
@@ -891,7 +909,6 @@ struct ComposerView: View {
     /// the chosen photo and annotations untouched (that's the separate, destructive "Reset Page").
     private func resetToOriginalState() {
         pan = .zero; scale = 1
-        transformResetToken &+= 1
         adjustments = .neutral
         useMeasuredPalette = false
         ditheringOverridden = false
@@ -931,7 +948,6 @@ struct ComposerView: View {
                 self.baseImage = normalized
                 self.previewBase = preview
                 self.pan = .zero; self.scale = 1
-                self.transformResetToken &+= 1
                 self.refreshCanvasImage()
             }
         }
@@ -964,7 +980,7 @@ struct ComposerView: View {
     private func resetPage() {
         // Photo + crop transform.
         baseImage = nil; previewBase = nil; canvasImage = nil; photoItem = nil
-        pan = .zero; scale = 1; transformResetToken &+= 1
+        pan = .zero; scale = 1
 
         // Annotations.
         activeTool = .photo
@@ -1002,12 +1018,12 @@ struct ComposerView: View {
 
     // MARK: - Text placement / editing
 
-    /// Place the pending text at the given position, select it, and clear the buffer.
+    /// Place the pending text at the given **normalized** position, select it, and clear the buffer.
     private func placeTextAtPoint(_ position: CGPoint) {
         let trimmed = pendingText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         pushUndo()
-        let item = TextItem(text: trimmed, fontSize: pendingTextSize,
+        let item = TextItem(text: trimmed, fontSize: canvasSpace.toNorm(length: pendingTextSize),
                             color: schemePaletteColors[safe: textColorIndex] ?? .black,
                             position: position)
         textItems.append(item)
@@ -1021,11 +1037,12 @@ struct ComposerView: View {
         guard !content.isEmpty else { return }
         pushUndo()
         let box = canvasSize
-        let size = box.width > 0 ? min(max(pendingQRSize, 24), max(min(box.width, box.height), 24))
-                                 : pendingQRSize
-        let item = QRItem(content: content, size: size,
+        let sidePoints = box.width > 0 ? min(max(pendingQRSize, 24), max(min(box.width, box.height), 24))
+                                       : pendingQRSize
+        // Centered in the box, sized as a fraction of it — both box-independent.
+        let item = QRItem(content: content, size: canvasSpace.toNorm(length: sidePoints),
                           color: schemePaletteColors[safe: qrColorIndex] ?? .black,
-                          position: CGPoint(x: max(box.width, 1) / 2, y: max(box.height, 1) / 2))
+                          position: CGPoint(x: 0.5, y: 0.5))
         qrItems.append(item)
         selection = .qr(item.id)
         qrPlacementArmed = false
@@ -1125,10 +1142,11 @@ struct ComposerView: View {
     }
 
     /// All canvas inputs needed to rasterize the composite, captured as value types so the render
-    /// can run off the main thread without touching SwiftUI `@State`.
+    /// can run off the main thread without touching SwiftUI `@State`. Annotation geometry and `pan`
+    /// are normalized (box-independent), so the render needs only the panel dimensions — not the
+    /// on-screen canvas box.
     private struct CompositeSnapshot {
         let width: Int, height: Int
-        let canvasSize: CGSize
         let baseImage: UIImage?
         let adjustments: ImageAdjustments
         let scale: CGFloat
@@ -1139,35 +1157,36 @@ struct ComposerView: View {
     }
 
     private func compositeSnapshot() -> CompositeSnapshot {
-        CompositeSnapshot(width: displayWidth, height: displayHeight, canvasSize: canvasSize,
+        CompositeSnapshot(width: displayWidth, height: displayHeight,
                           baseImage: baseImage, adjustments: adjustments, scale: scale, pan: pan,
                           strokes: strokes, textItems: textItems, qrItems: qrItems)
     }
 
     /// Render the cropped, adjusted photo plus annotations at the panel's native resolution — the
     /// exact bitmap handed to `ImageProcessor.process` → JS compression → BLE upload. Pure over its
-    /// snapshot so it can run off the main thread (see `compositeSnapshot`).
+    /// snapshot so it can run off the main thread (see `compositeSnapshot`). Because geometry is
+    /// normalized, `normalized × panelPixels` reproduces exactly the placement the old
+    /// point→pixel (`× k`) math produced, but independent of the current on-screen box.
     private static func renderComposite(_ s: CompositeSnapshot) -> UIImage {
         let w = s.width, h = s.height
-        let box = s.canvasSize.width > 0 ? s.canvasSize : CGSize(width: w, height: h)
-        let k = CGFloat(w) / box.width   // canvas points → panel pixels (aspect matches)
+        let wf = CGFloat(w), hf = CGFloat(h)
 
         return UIGraphicsImageRenderer(size: CGSize(width: w, height: h)).image { rendererCtx in
             UIColor.white.setFill()
             UIRectFill(CGRect(x: 0, y: 0, width: w, height: h))
 
-            // Photo: same aspect-fill + zoom + pan transform used on screen, scaled to pixels.
+            // Photo: same aspect-fill + zoom + pan transform used on screen, computed in pixels.
             if let base = s.baseImage {
                 let img = ImageProcessor.adjust(base, adjustments: s.adjustments)
                 let imgSize = img.size
                 if imgSize.width > 0, imgSize.height > 0 {
-                    let s0 = max(box.width / imgSize.width, box.height / imgSize.height)
+                    let s0 = max(wf / imgSize.width, hf / imgSize.height)
                     let scl = s0 * s.scale
                     let drawW = imgSize.width * scl
                     let drawH = imgSize.height * scl
-                    let x = (box.width - drawW) / 2 + s.pan.width
-                    let y = (box.height - drawH) / 2 + s.pan.height
-                    img.draw(in: CGRect(x: x * k, y: y * k, width: drawW * k, height: drawH * k))
+                    let x = (wf - drawW) / 2 + s.pan.width * wf
+                    let y = (hf - drawH) / 2 + s.pan.height * hf
+                    img.draw(in: CGRect(x: x, y: y, width: drawW, height: drawH))
                 }
             }
 
@@ -1176,29 +1195,29 @@ struct ComposerView: View {
             for stroke in s.strokes {
                 guard stroke.points.count > 1 else { continue }
                 UIColor(stroke.color).setStroke()
-                ctx.setLineWidth(stroke.lineWidth * k)
+                ctx.setLineWidth(stroke.lineWidth * wf)
                 ctx.beginPath()
-                ctx.move(to: CGPoint(x: stroke.points[0].x * k, y: stroke.points[0].y * k))
-                stroke.points.dropFirst().forEach { ctx.addLine(to: CGPoint(x: $0.x * k, y: $0.y * k)) }
+                ctx.move(to: CGPoint(x: stroke.points[0].x * wf, y: stroke.points[0].y * hf))
+                stroke.points.dropFirst().forEach { ctx.addLine(to: CGPoint(x: $0.x * wf, y: $0.y * hf)) }
                 ctx.strokePath()
             }
 
             for item in s.textItems {
                 let attrs: [NSAttributedString.Key: Any] = [
-                    .font: UIFont.systemFont(ofSize: item.fontSize * k),
+                    .font: UIFont.systemFont(ofSize: item.fontSize * wf),
                     .foregroundColor: UIColor(item.color)
                 ]
                 let str = NSAttributedString(string: item.text, attributes: attrs)
                 let sz = str.size()
-                str.draw(at: CGPoint(x: item.position.x * k - sz.width / 2,
-                                     y: item.position.y * k - sz.height / 2))
+                str.draw(at: CGPoint(x: item.position.x * wf - sz.width / 2,
+                                     y: item.position.y * hf - sz.height / 2))
             }
 
             for item in s.qrItems {
-                guard let qrImg = odGenerateQR(content: item.content, size: item.size * k, color: item.color) else { continue }
-                let side = item.size * k
-                qrImg.draw(in: CGRect(x: item.position.x * k - side / 2,
-                                      y: item.position.y * k - side / 2,
+                let side = item.size * wf
+                guard let qrImg = odGenerateQR(content: item.content, size: side, color: item.color) else { continue }
+                qrImg.draw(in: CGRect(x: item.position.x * wf - side / 2,
+                                      y: item.position.y * hf - side / 2,
                                       width: side, height: side))
             }
         }
