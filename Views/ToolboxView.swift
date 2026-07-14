@@ -114,7 +114,6 @@ struct ToolboxView: View {
             }
 
             if mode == .simple {
-                presetSection
                 hardwareSection
                 deepSleepSection
             } else {
@@ -277,32 +276,6 @@ struct ToolboxView: View {
     }
 
     // MARK: - Simple mode
-
-    private var presetSection: some View {
-        Section {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 135), spacing: 10)], spacing: 10) {
-                ForEach(premadePresets) { preset in
-                    Button {
-                        boardID = preset.board
-                        displayID = preset.display
-                        powerID = preset.power
-                    } label: {
-                        VStack(spacing: 6) {
-                            Image(systemName: "rectangle.on.rectangle.angled")
-                                .font(.title2)
-                            Text(preset.name).font(.caption).multilineTextAlignment(.center)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 76)
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-        } header: {
-            Text("Choose a device")
-        } footer: {
-            Text("Choose a complete preset, or select the hardware manually below.")
-        }
-    }
 
     @ViewBuilder
     private var hardwareSection: some View {
@@ -980,19 +953,6 @@ struct ToolboxView: View {
         guard let raw else { return nil }
         if raw.lowercased().hasPrefix("0x") { return Int(raw.dropFirst(2), radix: 16) }
         return Int(raw)
-    }
-
-    private let premadePresets: [PremadePreset] = [
-        .init(id: "reterminal-e1001", name: "reTerminal E1001", board: "reterminal-e1001", display: "ep75-800x480", power: "battery-2000"),
-        .init(id: "reterminal-e1002", name: "reTerminal E1002", board: "reterminal-e1002", display: "ep73-spectra-800x480", power: "battery-2000"),
-        .init(id: "reterminal-e1003", name: "reTerminal E1003", board: "reterminal-e1003", display: "seeed-ed103-1872x1404", power: "battery-3000"),
-        .init(id: "esp32-s3-wspp", name: "Waveshare PhotoPainter", board: "esp32-s3-wspp", display: "ep73-spectra-800x480", power: "battery-2000"),
-        .init(id: "xiao-75-c3", name: "Seeed XIAO 7.5\"", board: "xiao-75-c3", display: "ep75-800x480", power: "battery-2000"),
-        .init(id: "xiao-75-s3-og", name: "Seeed 7.5\" DIY", board: "ee04", display: "ep75-800x480", power: "battery-2000")
-    ]
-
-    private struct PremadePreset: Identifiable {
-        let id, name, board, display, power: String
     }
 
     private struct StatusEntry: Identifiable {
