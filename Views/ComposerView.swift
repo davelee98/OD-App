@@ -733,7 +733,7 @@ struct ComposerView: View {
                         .frame(width: 36, height: 36)
                         .overlay(
                             RoundedRectangle(cornerRadius: 8)
-                                .stroke(selection.wrappedValue == i ? Color.accentColor : Color(.systemGray4),
+                                .stroke(selection.wrappedValue == i ? Color.accentColor : Color.primary.opacity(0.3),
                                         lineWidth: selection.wrappedValue == i ? 3 : 1)
                         )
                 }

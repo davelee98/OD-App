@@ -14,6 +14,10 @@ struct SplashView: View {
                 .scaledToFit()
                 .containerRelativeFrame(.horizontal) { width, _ in width * 0.5 }
                 .frame(maxWidth: 320)
+                // Splash always uses the fixed-light "paper" background, so pin the logo to its
+                // light-appearance variant. Otherwise, in system dark mode the dark (light-ink)
+                // logo variant would render near-white lettering on the light paper and vanish.
+                .environment(\.colorScheme, .light)
 
             VStack(spacing: 10) {
                 (
