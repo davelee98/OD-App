@@ -1,0 +1,12 @@
+// Template for local signing config.
+//
+// Copy this file to "Local.xcconfig" (which is gitignored) and set your own
+// Apple Developer Team ID. Xcode reads it as the base configuration for the
+// "OD App" target, so signing uses your team without committing it to the repo.
+//
+// Find your Team ID in Xcode > Settings > Accounts, or at
+// https://developer.apple.com/account (Membership details).
+//
+// If this file is absent, the build still works: DEVELOPMENT_TEAM is simply
+// unset and Automatic signing falls back to your selected team.
+DEVELOPMENT_TEAM =

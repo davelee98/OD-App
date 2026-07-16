@@ -30,8 +30,6 @@
 		010000000000000000000040 /* DisplayDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000040 /* DisplayDevice.swift */; };
 		010000000000000000000041 /* DisplayCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000041 /* DisplayCanvasView.swift */; };
 		010000000000000000000042 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000042 /* ComposerView.swift */; };
-		0100000000000000000000B0 /* CanvasCoordinates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000B0 /* CanvasCoordinates.swift */; };
-		0100000000000000000000B1 /* CanvasCoordinateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000B1 /* CanvasCoordinateTests.swift */; };
 		010000000000000000000044 /* AdvancedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000044 /* AdvancedView.swift */; };
 		010000000000000000000045 /* CoreBluetoothTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000045 /* CoreBluetoothTransport.swift */; };
 		010000000000000000000046 /* OpenDisplayJSRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000046 /* OpenDisplayJSRuntime.swift */; };
@@ -54,6 +52,8 @@
 		0100000000000000000000A2 /* StringByteLimit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000A2 /* StringByteLimit.swift */; };
 		0100000000000000000000A3 /* StringByteLimitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000A3 /* StringByteLimitTests.swift */; };
 		0100000000000000000000A4 /* BLEChunkSizeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000A4 /* BLEChunkSizeTests.swift */; };
+		0100000000000000000000B0 /* CanvasCoordinates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000B0 /* CanvasCoordinates.swift */; };
+		0100000000000000000000B1 /* CanvasCoordinateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000B1 /* CanvasCoordinateTests.swift */; };
 		EC7030B92FEF0203009DC919 /* CryptoSwift in Frameworks */ = {isa = PBXBuildFile; productRef = EC7030B82FEF0203009DC919 /* CryptoSwift */; };
 /* End PBXBuildFile section */
 
@@ -93,8 +93,6 @@
 		020000000000000000000040 /* DisplayDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayDevice.swift; sourceTree = "<group>"; };
 		020000000000000000000041 /* DisplayCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayCanvasView.swift; sourceTree = "<group>"; };
 		020000000000000000000042 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
-		0200000000000000000000B0 /* CanvasCoordinates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasCoordinates.swift; sourceTree = "<group>"; };
-		0200000000000000000000B1 /* CanvasCoordinateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasCoordinateTests.swift; sourceTree = "<group>"; };
 		020000000000000000000044 /* AdvancedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedView.swift; sourceTree = "<group>"; };
 		020000000000000000000045 /* CoreBluetoothTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBluetoothTransport.swift; sourceTree = "<group>"; };
 		020000000000000000000046 /* OpenDisplayJSRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenDisplayJSRuntime.swift; sourceTree = "<group>"; };
@@ -118,6 +116,10 @@
 		0200000000000000000000A2 /* StringByteLimit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StringByteLimit.swift; sourceTree = "<group>"; };
 		0200000000000000000000A3 /* StringByteLimitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StringByteLimitTests.swift; sourceTree = "<group>"; };
 		0200000000000000000000A4 /* BLEChunkSizeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEChunkSizeTests.swift; sourceTree = "<group>"; };
+		0200000000000000000000B0 /* CanvasCoordinates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasCoordinates.swift; sourceTree = "<group>"; };
+		0200000000000000000000B1 /* CanvasCoordinateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasCoordinateTests.swift; sourceTree = "<group>"; };
+		EC808A1A300874BE00E4CBC1 /* OD App.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = file; path = "OD App.xctestplan"; sourceTree = "<group>"; };
+		0200000000000000000000C0 /* Local.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -146,6 +148,8 @@
 		030000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
+				0200000000000000000000C0 /* Local.xcconfig */,
+				EC808A1A300874BE00E4CBC1 /* OD App.xctestplan */,
 				020000000000000000000001 /* ODApp.swift */,
 				020000000000000000000002 /* ContentView.swift */,
 				020000000000000000000012 /* Info.plist */,
@@ -574,6 +578,7 @@
 		};
 		060000000000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 0200000000000000000000C0 /* Local.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
@@ -598,6 +603,7 @@
 		};
 		060000000000000000000004 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 0200000000000000000000C0 /* Local.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
