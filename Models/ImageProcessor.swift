@@ -119,12 +119,9 @@ enum ImageProcessor {
             compressDynamicRange(&floatPixels, colorScheme: colorScheme, strength: toneCompression)
         }
 
-        // Apply dithering
-        applyDithering(&floatPixels, width: width, height: height,
-                        palette: palette, mode: dithering)
-
-        // Quantize to palette indices
-        let indexed = quantize(floatPixels, palette: palette)
+        // Dither + quantize via the Rust core (OKLab matching — identical to website/Python).
+        let indexed = ditherIndices(floatPixels, width: width, height: height,
+                                    palette: palette, mode: dithering)
 
         // Pack into wire format
         return pack(indexed, scheme: colorScheme, width: width, height: height)
@@ -143,8 +140,7 @@ enum ImageProcessor {
         if useMeasuredPalette {
             compressDynamicRange(&floatPixels, colorScheme: colorScheme, strength: toneCompression)
         }
-        applyDithering(&floatPixels, width: width, height: height, palette: palette, mode: dithering)
-        let indexed = quantize(floatPixels, palette: palette)
+        let indexed = ditherIndices(floatPixels, width: width, height: height, palette: palette, mode: dithering)
         // Map indices back to palette RGB and write into pixels
         for i in 0..<(width * height) {
             let (r, g, b) = palette[indexed[i]]
@@ -174,8 +170,7 @@ enum ImageProcessor {
         if useMeasuredPalette {
             compressDynamicRange(&floatPixels, colorScheme: colorScheme, strength: toneCompression)
         }
-        applyDithering(&floatPixels, width: width, height: height, palette: palette, mode: dithering)
-        let indexed = quantize(floatPixels, palette: palette)
+        let indexed = ditherIndices(floatPixels, width: width, height: height, palette: palette, mode: dithering)
 
         let packed = pack(indexed, scheme: colorScheme, width: width, height: height)
 
@@ -351,6 +346,40 @@ enum ImageProcessor {
     }
 
     // MARK: - Dithering
+
+    /// Dither interleaved float sRGB planes (0-255) to palette indices via the Rust core
+    /// (`RustDither` → `EpaperDithering` XCFramework). OKLab matching, so output is identical to
+    /// the website / Python / firmware reference. Pixels are expected to be already pre-processed
+    /// (tone compression, if any, has run in `compressDynamicRange` upstream).
+    ///
+    /// Falls back to the legacy Swift error-diffusion path if the FFI ever fails — which should not
+    /// happen for validated inputs; the `assertionFailure` surfaces it in Debug/tests.
+    private static func ditherIndices(_ pixels: [Float], width: Int, height: Int,
+                                      palette: [RGB], mode: DitheringMode) -> [Int] {
+        let n = width * height
+        // Interleaved float sRGB (0-255) → clamped/rounded UInt8 RGB.
+        var rgb = [UInt8](repeating: 0, count: n * 3)
+        for i in 0..<(n * 3) {
+            rgb[i] = UInt8(min(max(pixels[i].rounded(), 0), 255))
+        }
+        // Palette RGB floats → flat UInt8 bytes, in the app's wire index order.
+        var palBytes = [UInt8](repeating: 0, count: palette.count * 3)
+        for (i, c) in palette.enumerated() {
+            palBytes[i * 3 + 0] = UInt8(min(max(c.r.rounded(), 0), 255))
+            palBytes[i * 3 + 1] = UInt8(min(max(c.g.rounded(), 0), 255))
+            palBytes[i * 3 + 2] = UInt8(min(max(c.b.rounded(), 0), 255))
+        }
+        do {
+            let idx = try RustDither.dither(rgb: rgb, width: width, height: height,
+                                            palette: palBytes, mode: mode)
+            return idx.map { Int($0) }
+        } catch {
+            assertionFailure("RustDither failed (\(error)); falling back to Swift dithering")
+            var fallback = pixels
+            applyDithering(&fallback, width: width, height: height, palette: palette, mode: mode)
+            return quantize(fallback, palette: palette)
+        }
+    }
 
     private static func applyDithering(_ pixels: inout [Float], width: Int, height: Int,
                                         palette: [RGB], mode: DitheringMode) {

@@ -55,6 +55,12 @@
 		0100000000000000000000B0 /* CanvasCoordinates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000B0 /* CanvasCoordinates.swift */; };
 		0100000000000000000000B1 /* CanvasCoordinateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000B1 /* CanvasCoordinateTests.swift */; };
 		EC7030B92FEF0203009DC919 /* CryptoSwift in Frameworks */ = {isa = PBXBuildFile; productRef = EC7030B82FEF0203009DC919 /* CryptoSwift */; };
+		010000000000000000000060 /* RustDither.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000060 /* RustDither.swift */; };
+		010000000000000000000061 /* EpaperDithering.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000061 /* EpaperDithering.xcframework */; };
+		010000000000000000000062 /* RustDitherParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000062 /* RustDitherParityTests.swift */; };
+		010000000000000000000063 /* cat_800x480.rgb in Resources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000063 /* cat_800x480.rgb */; };
+		010000000000000000000064 /* cat__floyd_steinberg_mono_raw.bin in Resources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000064 /* cat__floyd_steinberg_mono_raw.bin */; };
+		010000000000000000000065 /* EpaperDithering.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000061 /* EpaperDithering.xcframework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -120,6 +126,11 @@
 		0200000000000000000000B1 /* CanvasCoordinateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasCoordinateTests.swift; sourceTree = "<group>"; };
 		EC808A1A300874BE00E4CBC1 /* OD App.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = file; path = "OD App.xctestplan"; sourceTree = "<group>"; };
 		0200000000000000000000C0 /* Local.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.xcconfig; sourceTree = "<group>"; };
+		020000000000000000000060 /* RustDither.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustDither.swift; sourceTree = "<group>"; };
+		020000000000000000000061 /* EpaperDithering.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = EpaperDithering.xcframework; path = Frameworks/EpaperDithering.xcframework; sourceTree = "<group>"; };
+		020000000000000000000062 /* RustDitherParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustDitherParityTests.swift; sourceTree = "<group>"; };
+		020000000000000000000063 /* cat_800x480.rgb */ = {isa = PBXFileReference; lastKnownFileType = file; path = cat_800x480.rgb; sourceTree = "<group>"; };
+		020000000000000000000064 /* cat__floyd_steinberg_mono_raw.bin */ = {isa = PBXFileReference; lastKnownFileType = file; path = cat__floyd_steinberg_mono_raw.bin; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -131,6 +142,7 @@
 				010000000000000000000011 /* Security.framework in Frameworks */,
 				010000000000000000000047 /* JavaScriptCore.framework in Frameworks */,
 				EC7030B92FEF0203009DC919 /* CryptoSwift in Frameworks */,
+				010000000000000000000061 /* EpaperDithering.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -139,6 +151,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				010000000000000000000051 /* XCTest.framework in Frameworks */,
+				010000000000000000000065 /* EpaperDithering.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -219,6 +232,7 @@
 				0200000000000000000000B0 /* CanvasCoordinates.swift */,
 				02000000000000000000000E /* ConfigModel.swift */,
 				020000000000000000000021 /* ImageProcessor.swift */,
+				020000000000000000000060 /* RustDither.swift */,
 				020000000000000000000025 /* ToolboxData.swift */,
 				0200000000000000000000A2 /* StringByteLimit.swift */,
 				020000000000000000000026 /* AdvertisementData.swift */,
@@ -230,6 +244,7 @@
 		030000000000000000000007 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				020000000000000000000061 /* EpaperDithering.xcframework */,
 				020000000000000000000010 /* CoreBluetooth.framework */,
 				020000000000000000000011 /* Security.framework */,
 				020000000000000000000047 /* JavaScriptCore.framework */,
@@ -271,8 +286,19 @@
 				0200000000000000000000A1 /* ODDeviceAdmissionTests.swift */,
 				0200000000000000000000A4 /* BLEChunkSizeTests.swift */,
 				0200000000000000000000B1 /* CanvasCoordinateTests.swift */,
+				020000000000000000000062 /* RustDitherParityTests.swift */,
+				03000000000000000000000B /* Fixtures */,
 			);
 			path = Tests;
+			sourceTree = "<group>";
+		};
+		03000000000000000000000B /* Fixtures */ = {
+			isa = PBXGroup;
+			children = (
+				020000000000000000000063 /* cat_800x480.rgb */,
+				020000000000000000000064 /* cat__floyd_steinberg_mono_raw.bin */,
+			);
+			path = Fixtures;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -376,6 +402,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				010000000000000000000063 /* cat_800x480.rgb in Resources */,
+				010000000000000000000064 /* cat__floyd_steinberg_mono_raw.bin in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -427,6 +455,7 @@
 				01000000000000000000000E /* ConfigModel.swift in Sources */,
 				010000000000000000000054 /* AdvancedSettingsView.swift in Sources */,
 				010000000000000000000021 /* ImageProcessor.swift in Sources */,
+				010000000000000000000060 /* RustDither.swift in Sources */,
 				010000000000000000000022 /* ToolboxView.swift in Sources */,
 				010000000000000000000024 /* ODLogoView.swift in Sources */,
 				010000000000000000000053 /* SplashView.swift in Sources */,
@@ -447,6 +476,7 @@
 				0100000000000000000000A1 /* ODDeviceAdmissionTests.swift in Sources */,
 				0100000000000000000000A4 /* BLEChunkSizeTests.swift in Sources */,
 				0100000000000000000000B1 /* CanvasCoordinateTests.swift in Sources */,
+				010000000000000000000062 /* RustDitherParityTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -585,6 +615,10 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 3;
 				ENABLE_PREVIEWS = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Frameworks",
+				);
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -610,6 +644,10 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 3;
 				ENABLE_PREVIEWS = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Frameworks",
+				);
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -631,6 +669,10 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Frameworks",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.opendisplay.od-appTests";
@@ -646,6 +688,10 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Frameworks",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.opendisplay.od-appTests";
