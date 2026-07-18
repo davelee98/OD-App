@@ -152,7 +152,7 @@ Step-by-step:
 2. All canvas geometry — stroke points, text/QR positions and sizes, and the photo `pan` — is stored **normalized (0…1) to the canvas box** (`CanvasCoordinates.swift`, types in `DisplayCanvasView.swift`). The box is always locked to the panel's aspect ratio, so lengths normalize by width alone and stay isotropic. Rotation, iPad window resize, or a late config aspect change preserves the composition with zero rescaling. Gesture baselines are captured at gesture *start*, pinch is reserved exclusively for photo zoom (`pinchActive` gates the drag layer), and element resize is done with sliders, not pinch.
 3. Adjustments (`ImageAdjustments`: brightness/contrast/shadows/highlights/saturation/tone-compression) refresh the canvas via a **serial file-scope queue** with a monotonic render token that drops stale results — a fast slider drag can't stack concurrent Core Image renders and spike memory.
 4. Send: `device.beginUpload()` flips the overlay to `.preparing` *before* the slow render. `compositeSnapshot()` captures all `@State` into a value struct on the main thread; `renderComposite` then rasterizes photo (aspect-fill + zoom + normalized pan) plus strokes/text/QR at native panel resolution off-main, entirely from `normalized × panelPixels`.
-5. `ImageProcessor.processWithPreview` (`Models/ImageProcessor.swift`) runs one dither pass returning both the packed wire bytes and a preview `UIImage`. Pipeline: RGBA extraction → optional measured-palette tone compression (a formula-for-formula port of the epaper-dithering Rust `tone_map.rs`) → error-diffusion dithering (8 kernels) → palette quantization → per-scheme bit packing (1bpp, dual bitplanes, 2bpp, 6-color nibble remap, 4-gray dual-plane LUT, 4bpp).
+5. `ImageProcessor.processWithPreview` (`Models/ImageProcessor.swift`) runs one dither pass returning both the packed wire bytes and a preview `UIImage`. Pipeline: RGBA extraction → optional measured-palette tone compression (a formula-for-formula port of the epaper-dithering Rust `tone_map.rs`) → **OKLab palette matching + error diffusion in the Rust `epaper-dithering-core`**, called via `Models/RustDither.swift` over the vendored `Frameworks/EpaperDithering.xcframework` — so the dithered output is byte-for-byte identical to the website/Python reference; ImageProcessor no longer implements the matcher, it delegates → per-scheme bit packing (1bpp, dual bitplanes, 2bpp, 6-color nibble remap, 4-gray dual-plane LUT, 4bpp).
 6. `ODDevice.uploadImage` validates the packed byte count against `expectedPackedByteCount` for the device's scheme, then calls the JS `uploadPacked`. `ble-app-adapter.js` applies the **compression gate mirrored line-for-line from opendisplay.org**: compress iff transmission-modes bit 0 (streaming decompression) is set; compressed uploads prepend a 4-byte size header to the `0x0070` Image Start; chunk size is 230 bytes (154 when the session is encrypted).
 7. `ble-common.js` streams chunks with per-chunk ACKs and emits `uploadProgress`/`uploadStatus` events. The JS layer has **no timeouts**, so `ODDevice` arms a 30 s stall watchdog re-armed on every progress event — it fires only on a genuine gap, not a slow-but-advancing upload.
 8. At `progress ≥ 1` the send **completes early** (`completeUploadEarly`): all chunks are acked, and the display's e-paper refresh (`0x73`, seconds to tens of seconds later, silent on BLE) is "the display's problem from here". The overlay shows the composite with the dithered result revealed left→right in lockstep with progress; terminal states auto-dismiss (success ~2 s, failure ~6 s with Retry).
@@ -201,7 +201,7 @@ Step-by-step:
 |---|---|---|
 | `ODApp.swift` | `@main`; shared `BLEManager`, SwiftData container, splash presentation | 45 |
 | `ContentView.swift` | Home registry, `AddDisplaySheet` (pair + name + config-gated save), reusable `DevicePickerContent` | 423 |
-| `Views/ComposerView.swift` | Photo/annotation editing session, tool panels, send pipeline, `UploadStatusOverlay` | 1,387 |
+| `Views/ComposerView.swift` | Photo/annotation editing session, tool panels, send pipeline, `UploadStatusOverlay` | 1,440 |
 | `Views/DisplayCanvasView.swift` | Aspect-locked canvas, gestures (pinch=zoom, drag, tap-place), hit-testing, QR generation/caching, annotation types | 640 |
 | `Views/ToolboxView.swift` | Simple/Advanced config editor, packet editor, deferred write, import/export, schema editor | 1,246 |
 | `Views/AdvancedView.swift` | Engineering-tools hub + `BLELogView` (filtered shared log, export) | 195 |
@@ -217,9 +217,10 @@ Step-by-step:
 | `Protocol/ODAuth.swift` | Keychain PSK CRUD + secure random PSK | 69 |
 | `Protocol/ODCommands.swift` | NFC payload builders (only commands the JS doesn't expose), `Data` hex/chunk helpers | 75 |
 | `Protocol/ODConfig.swift` | `ODConfig.parse/serialize` facade over the JS codec | 12 |
-| `Models/ImageProcessor.swift` | Adjustments (Core Image), tone compression (Rust port), 8 dither kernels, per-scheme wire packing | 543 |
+| `Models/ImageProcessor.swift` | Adjustments (Core Image), tone compression (Rust port), delegates dithering to the Rust core, per-scheme wire packing | 480 |
+| `Models/RustDither.swift` | Swift front door to the Rust `epaper-dithering-core` dithering FFI (`ed_dither`), via `Frameworks/EpaperDithering.xcframework` | 75 |
 | `Models/CanvasCoordinates.swift` | `CanvasSpace`/`PanelSpace` normalized-coordinate conversions | 67 |
-| `Models/ConfigModel.swift` | `ODConfigModel`: typed accessors over Toolbox packets (dimensions, scheme, transmission modes, PSK) | 121 |
+| `Models/ConfigModel.swift` | `ODConfigModel`: typed accessors over Toolbox packets (dimensions, scheme, transmission modes, PSK) | 115 |
 | `Models/DisplayDevice.swift` | `SavedDisplayEntity` (SwiftData) + `DisplayDevice` DTO + `apply(config:)` provenance | 110 |
 | `Models/ToolboxData.swift` | Schema/preset/catalog Codable models, indexed-preset round-trip, Swift-side validation, JSON document types | 404 |
 | `Models/AdvertisementData.swift` | 16-byte MSD parser + config-dependent `ODAdvertisementLayout` (battery/touch/SHT40/buttons) | 266 |

@@ -65,8 +65,8 @@ OD App/
 │   └── toolbox-config-engine.js ← Schema-driven config build/parse/validation logic
 ├── Models/
 │   ├── ConfigModel.swift        ← ODConfigModel (display settings, WiFi, security)
-│   ├── DevicePreset.swift       ← Known hardware dimension presets
-│   └── ImageProcessor.swift     ← Dithering engine, palette quantization, wire-format packing, deflate
+│   ├── RustDither.swift         ← Swift front door to the Rust dithering FFI (EpaperDithering.xcframework)
+│   └── ImageProcessor.swift     ← Core Image adjustments, tone compression, delegates dithering to Rust, wire-format packing
 └── Views/
     ├── ScanView.swift           ← BLE scanner, device list, Bluetooth state handling
     ├── DeviceDetailView.swift   ← Tab container (Toolbox | Display | BLE Tester)

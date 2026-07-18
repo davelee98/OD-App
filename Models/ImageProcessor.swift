@@ -97,36 +97,6 @@ enum ImageProcessor {
         }
     }
 
-    // MARK: - Main Entry Point
-
-    /// Process a UIImage into packed wire-format bytes ready for BLE upload.
-    static func process(image: UIImage, width: Int, height: Int,
-                        colorScheme: UInt8, dithering: DitheringMode,
-                        useMeasuredPalette: Bool = false, toneCompression: Double = 0) -> Data? {
-        guard let cgImage = image.cgImage else { return nil }
-        let palette = (useMeasuredPalette ? measuredPalettes[colorScheme] : nil)
-                    ?? palettes[colorScheme] ?? palettes[0]!
-
-        // Render into RGBA buffer at target size
-        let pixels = rgbaPixels(from: cgImage, width: width, height: height)
-        guard !pixels.isEmpty else { return nil }
-
-        // Extract float RGB planes for dithering
-        var floatPixels = toFloat(pixels, count: width * height)
-
-        // Compress the photo's dynamic range into the panel's measured black/white range.
-        if useMeasuredPalette {
-            compressDynamicRange(&floatPixels, colorScheme: colorScheme, strength: toneCompression)
-        }
-
-        // Dither + quantize via the Rust core (OKLab matching — identical to website/Python).
-        guard let indexed = ditherIndices(floatPixels, width: width, height: height,
-                                          palette: palette, mode: dithering) else { return nil }
-
-        // Pack into wire format
-        return pack(indexed, scheme: colorScheme, width: width, height: height)
-    }
-
     // MARK: - Preview (apply dithering to UIImage for display)
 
     static func preview(image: UIImage, width: Int, height: Int,
@@ -387,23 +357,22 @@ enum ImageProcessor {
 
     private static func pack(_ indexed: [Int], scheme: UInt8, width: Int, height: Int) -> Data {
         switch scheme {
-        case 0:        return pack1bpp(indexed, invert: false)
+        case 0:        return pack1bpp(indexed)
         case 1:        return pack2planes(indexed, redIdx: 2, yellowIdx: nil, width: width, height: height)
         case 2:        return pack2planes(indexed, redIdx: nil, yellowIdx: 2, width: width, height: height)
         case 3:        return pack2bpp(indexed)
         case 4:        return pack6color(indexed)
         case 5:        return packGray4(indexed, width: width, height: height)
         case 6:        return pack4bpp(indexed)
-        default:       return pack1bpp(indexed, invert: false)
+        default:       return pack1bpp(indexed)
         }
     }
 
     // 1 bpp: 0=black, 1=white, MSB first
-    private static func pack1bpp(_ indexed: [Int], invert: Bool) -> Data {
+    private static func pack1bpp(_ indexed: [Int]) -> Data {
         var out = Data(count: (indexed.count + 7) / 8)
         for (i, v) in indexed.enumerated() {
-            let bit = invert ? (v == 0 ? 1 : 0) : v
-            if bit != 0 { out[i / 8] |= UInt8(0x80 >> (i % 8)) }
+            if v != 0 { out[i / 8] |= UInt8(0x80 >> (i % 8)) }
         }
         return out
     }

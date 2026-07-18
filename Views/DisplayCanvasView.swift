@@ -589,25 +589,8 @@ func odGenerateQR(content: String, size: CGFloat, color: Color) -> UIImage? {
 
 // MARK: - Supporting Types
 
-enum CanvasMode: String, CaseIterable, Identifiable {
+enum CanvasMode: String {
     case move, draw, text, qr
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .move: return "Photo"
-        case .draw: return "Draw"
-        case .text: return "Text"
-        case .qr:   return "QR"
-        }
-    }
-    var systemImage: String {
-        switch self {
-        case .move: return "hand.draw"
-        case .draw: return "pencil.tip"
-        case .text: return "textformat"
-        case .qr:   return "qrcode"
-        }
-    }
 }
 
 /// The currently selected canvas element. Strokes are intentionally not selectable.

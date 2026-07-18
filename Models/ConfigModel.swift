@@ -95,12 +95,6 @@ struct ODConfigModel: Equatable {
         }
     }
 
-    // The current website schema has no device-label field.
-    var deviceLabel: String {
-        get { "" }
-        set { }
-    }
-
     private func value(type: Int, field: String) -> String? {
         toolbox.packets.first(where: { $0.packetType == type })?.fields[field]
     }
