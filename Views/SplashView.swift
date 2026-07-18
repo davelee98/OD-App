@@ -38,10 +38,13 @@ struct SplashView: View {
 
             Spacer()
 
-            Text("Copyright (c) 2026 by OpenDisplay.org")
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(ODPalette.ink3)
-                .padding(.bottom, 24)
+            VStack(spacing: 4) {
+                Text("Version \(AppInfo.version)")
+                Text("Copyright (c) 2026 by OpenDisplay.org")
+            }
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(ODPalette.ink3)
+            .padding(.bottom, 24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ODPalette.paper)
