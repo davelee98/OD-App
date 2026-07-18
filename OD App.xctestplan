@@ -1,0 +1,30 @@
+{
+  "configurations" : [
+    {
+      "id" : "12C369EF-7EE4-4B62-8F72-49A84988A113",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "performanceAntipatternCheckerEnabled" : true,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:OD App.xcodeproj",
+      "identifier" : "050000000000000000000001",
+      "name" : "OD App"
+    }
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : true,
+      "target" : {
+        "containerPath" : "container:OD App.xcodeproj",
+        "identifier" : "050000000000000000000002",
+        "name" : "OD AppTests"
+      }
+    }
+  ],
+  "version" : 1
+}
