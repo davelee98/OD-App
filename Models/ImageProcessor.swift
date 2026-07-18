@@ -120,8 +120,8 @@ enum ImageProcessor {
         }
 
         // Dither + quantize via the Rust core (OKLab matching — identical to website/Python).
-        let indexed = ditherIndices(floatPixels, width: width, height: height,
-                                    palette: palette, mode: dithering)
+        guard let indexed = ditherIndices(floatPixels, width: width, height: height,
+                                          palette: palette, mode: dithering) else { return nil }
 
         // Pack into wire format
         return pack(indexed, scheme: colorScheme, width: width, height: height)
@@ -140,7 +140,7 @@ enum ImageProcessor {
         if useMeasuredPalette {
             compressDynamicRange(&floatPixels, colorScheme: colorScheme, strength: toneCompression)
         }
-        let indexed = ditherIndices(floatPixels, width: width, height: height, palette: palette, mode: dithering)
+        guard let indexed = ditherIndices(floatPixels, width: width, height: height, palette: palette, mode: dithering) else { return nil }
         // Map indices back to palette RGB and write into pixels
         for i in 0..<(width * height) {
             let (r, g, b) = palette[indexed[i]]
@@ -170,7 +170,7 @@ enum ImageProcessor {
         if useMeasuredPalette {
             compressDynamicRange(&floatPixels, colorScheme: colorScheme, strength: toneCompression)
         }
-        let indexed = ditherIndices(floatPixels, width: width, height: height, palette: palette, mode: dithering)
+        guard let indexed = ditherIndices(floatPixels, width: width, height: height, palette: palette, mode: dithering) else { return nil }
 
         let packed = pack(indexed, scheme: colorScheme, width: width, height: height)
 
@@ -352,10 +352,13 @@ enum ImageProcessor {
     /// the website / Python / firmware reference. Pixels are expected to be already pre-processed
     /// (tone compression, if any, has run in `compressDynamicRange` upstream).
     ///
-    /// Falls back to the legacy Swift error-diffusion path if the FFI ever fails — which should not
-    /// happen for validated inputs; the `assertionFailure` surfaces it in Debug/tests.
+    /// Returns `nil` if the FFI reports failure — which cannot happen for the validated inputs this
+    /// method always passes (correct dimensions, a ≥2-color palette). There is deliberately no Swift
+    /// fallback: the old sRGB-Euclidean matcher produced website-divergent output, so silently
+    /// substituting it would reintroduce the exact drift this replaced. A failure is logged and
+    /// propagated as `nil` (callers return `nil` / no image) rather than shipping wrong pixels.
     private static func ditherIndices(_ pixels: [Float], width: Int, height: Int,
-                                      palette: [RGB], mode: DitheringMode) -> [Int] {
+                                      palette: [RGB], mode: DitheringMode) -> [Int]? {
         let n = width * height
         // Interleaved float sRGB (0-255) → clamped/rounded UInt8 RGB.
         var rgb = [UInt8](repeating: 0, count: n * 3)
@@ -374,68 +377,10 @@ enum ImageProcessor {
                                             palette: palBytes, mode: mode)
             return idx.map { Int($0) }
         } catch {
-            assertionFailure("RustDither failed (\(error)); falling back to Swift dithering")
-            var fallback = pixels
-            applyDithering(&fallback, width: width, height: height, palette: palette, mode: mode)
-            return quantize(fallback, palette: palette)
+            ODLog.imaging.error("RustDither failed: \(String(describing: error), privacy: .public)")
+            assertionFailure("RustDither failed for validated inputs: \(error)")
+            return nil
         }
-    }
-
-    private static func applyDithering(_ pixels: inout [Float], width: Int, height: Int,
-                                        palette: [RGB], mode: DitheringMode) {
-        switch mode {
-        case .none:           break
-        case .floydSteinberg: errorDiffuse(&pixels, w: width, h: height, palette: palette,
-                                            kernel: [(1,0,7/16.0),(-1,1,3/16.0),(0,1,5/16.0),(1,1,1/16.0)])
-        case .atkinson:       errorDiffuse(&pixels, w: width, h: height, palette: palette,
-                                            kernel: [(1,0,1/8.0),(2,0,1/8.0),(-1,1,1/8.0),(0,1,1/8.0),(1,1,1/8.0),(0,2,1/8.0)])
-        case .stucki:         errorDiffuse(&pixels, w: width, h: height, palette: palette,
-                                            kernel: [(1,0,8/42.0),(2,0,4/42.0),(-2,1,2/42.0),(-1,1,4/42.0),(0,1,8/42.0),(1,1,4/42.0),(2,1,2/42.0),(-2,2,1/42.0),(-1,2,2/42.0),(0,2,4/42.0),(1,2,2/42.0),(2,2,1/42.0)])
-        case .sierra:         errorDiffuse(&pixels, w: width, h: height, palette: palette,
-                                            kernel: [(1,0,5/32.0),(2,0,3/32.0),(-2,1,2/32.0),(-1,1,4/32.0),(0,1,5/32.0),(1,1,4/32.0),(2,1,3/32.0),(-1,2,2/32.0),(0,2,3/32.0),(1,2,2/32.0)])
-        case .sierraLite:     errorDiffuse(&pixels, w: width, h: height, palette: palette,
-                                            kernel: [(1,0,2/4.0),(-1,1,1/4.0),(0,1,1/4.0)])
-        case .burkes:         errorDiffuse(&pixels, w: width, h: height, palette: palette,
-                                            kernel: [(1,0,8/32.0),(2,0,4/32.0),(-2,1,2/32.0),(-1,1,4/32.0),(0,1,8/32.0),(1,1,4/32.0),(2,1,2/32.0)])
-        case .jarvis:         errorDiffuse(&pixels, w: width, h: height, palette: palette,
-                                            kernel: [(1,0,7/48.0),(2,0,5/48.0),(-2,1,3/48.0),(-1,1,5/48.0),(0,1,7/48.0),(1,1,5/48.0),(2,1,3/48.0),(-2,2,1/48.0),(-1,2,3/48.0),(0,2,5/48.0),(1,2,3/48.0),(2,2,1/48.0)])
-        }
-    }
-
-    private static func errorDiffuse(_ p: inout [Float], w: Int, h: Int,
-                                      palette: [RGB], kernel: [(Int, Int, Float)]) {
-        for y in 0..<h {
-            for x in 0..<w {
-                let i = (y * w + x) * 3
-                let old = (p[i], p[i+1], p[i+2])
-                let idx = nearest(r: old.0, g: old.1, b: old.2, palette: palette)
-                let (nr, ng, nb) = palette[idx]
-                p[i] = nr; p[i+1] = ng; p[i+2] = nb
-                let er = old.0 - nr, eg = old.1 - ng, eb = old.2 - nb
-                for (dx, dy, frac) in kernel {
-                    let nx = x + dx, ny = y + dy
-                    guard nx >= 0 && nx < w && ny >= 0 && ny < h else { continue }
-                    let ni = (ny * w + nx) * 3
-                    p[ni]   = (p[ni]   + er * frac).clamped(to: 0...255)
-                    p[ni+1] = (p[ni+1] + eg * frac).clamped(to: 0...255)
-                    p[ni+2] = (p[ni+2] + eb * frac).clamped(to: 0...255)
-                }
-            }
-        }
-    }
-
-    private static func nearest(r: Float, g: Float, b: Float, palette: [RGB]) -> Int {
-        var best = 0; var bestDist = Float.infinity
-        for (i, (pr, pg, pb)) in palette.enumerated() {
-            let d = (r-pr)*(r-pr) + (g-pg)*(g-pg) + (b-pb)*(b-pb)
-            if d < bestDist { bestDist = d; best = i }
-        }
-        return best
-    }
-
-    private static func quantize(_ pixels: [Float], palette: [RGB]) -> [Int] {
-        let count = pixels.count / 3
-        return (0..<count).map { i in nearest(r: pixels[i*3], g: pixels[i*3+1], b: pixels[i*3+2], palette: palette) }
     }
 
     // MARK: - Wire Format Packing
@@ -537,12 +482,6 @@ enum ImageProcessor {
             else           { out[i / 2] |= UInt8(v & 0x0F) }
         }
         return out
-    }
-}
-
-private extension Float {
-    func clamped(to range: ClosedRange<Float>) -> Float {
-        Swift.max(range.lowerBound, Swift.min(range.upperBound, self))
     }
 }
 
