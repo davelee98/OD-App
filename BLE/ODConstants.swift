@@ -2,7 +2,11 @@ import Foundation
 import CoreBluetooth
 
 enum AppInfo {
-    static let version = "0.1.4"
+    /// Marketing version (`CFBundleShortVersionString`, i.e. `MARKETING_VERSION`) read from the app
+    /// bundle, so the About screen always matches the shipped build instead of a hand-edited literal.
+    static let version: String = {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+    }()
 }
 
 enum OD {
