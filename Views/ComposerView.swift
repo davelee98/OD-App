@@ -13,10 +13,11 @@ private let composerCanvasQueue = DispatchQueue(label: "org.opendisplay.composer
 private let canvasPreviewMaxDimension: CGFloat = 1600
 
 /// The composer's tool chips. Exactly one is active at a time (radio-style); `.photo` is the
-/// resting state (pinch/drag the background). `.draw/.text/.qr` map to a `CanvasMode`; the rest
-/// (`.adjustments/.dithering/.colorMode`) are photo-level tools that leave the canvas in `.move`.
+/// resting state (pinch/drag the background, plus the photo adjustment sliders). `.draw/.text/.qr`
+/// map to a `CanvasMode`; the rest (`.dithering/.colorMode`) are photo-level tools that leave the
+/// canvas in `.move`.
 enum ComposerTool: String, CaseIterable, Identifiable {
-    case photo, draw, text, qr, adjustments, dithering, colorMode
+    case photo, draw, text, qr, dithering, colorMode
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -24,7 +25,6 @@ enum ComposerTool: String, CaseIterable, Identifiable {
         case .draw: return "Draw"
         case .text: return "Text"
         case .qr: return "QR"
-        case .adjustments: return "Adjust"
         case .dithering: return "Dithering"
         case .colorMode: return "Color Mode"
         }
@@ -35,7 +35,6 @@ enum ComposerTool: String, CaseIterable, Identifiable {
         case .draw: return "pencil.tip"
         case .text: return "textformat"
         case .qr: return "qrcode"
-        case .adjustments: return "slider.horizontal.3"
         case .dithering: return "square.grid.3x3"
         case .colorMode: return "paintpalette"
         }
@@ -141,7 +140,7 @@ struct ComposerView: View {
         case .draw: return .draw
         case .text: return .text
         case .qr: return .qr
-        case .photo, .adjustments, .dithering, .colorMode: return .move
+        case .photo, .dithering, .colorMode: return .move
         }
     }
 
@@ -402,7 +401,6 @@ struct ComposerView: View {
         case .draw:    drawPanel
         case .text:    textPanel
         case .qr:      qrPanel
-        case .adjustments: adjustmentsSection
         case .dithering:   ditheringPanel
         case .colorMode:   colorModePanel
         }
@@ -426,6 +424,10 @@ struct ComposerView: View {
                     .font(.caption).buttonStyle(.bordered)
                     .disabled(isAtOriginalState)
             }
+
+            Divider().padding(.vertical, 2)
+
+            adjustmentsSection
         }
     }
 
