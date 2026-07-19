@@ -8,7 +8,7 @@ edit the canonical header upstream and regenerate.
 
 | File | Upstream source | Generator |
 |---|---|---|
-| `opendisplay_protocol.swift` | `opendisplay-protocol/src/opendisplay_protocol.h` (`OD_PROTOCOL_VERSION 2.0`) | `tools/gen_swift_protocol.py` |
+| `opendisplay_protocol.swift` | `opendisplay-protocol/src/opendisplay_protocol.h` (`OD_PROTOCOL_VERSION 2.1`) | `tools/gen_swift_protocol.py` |
 | `opendisplay_structs.swift` | `opendisplay-protocol/src/opendisplay_structs.h` (`OD_STRUCTS_VERSION 2.0`) | `tools/gen_swift_structs.py` |
 
 `opendisplay_protocol.swift` is the wire-protocol constants (opcodes, response/auth/NACK bytes) as
