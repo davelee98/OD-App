@@ -74,23 +74,49 @@ public final class ODProtocolClient {
         return try await body()
     }
 
-    /// Upload a packed image. Phase 1 always uses the legacy direct-write path; pipe selection
-    /// (modes bit4) is added in Phase 4.
+    /// Upload a packed image. Prefers the PIPE sliding-window path when the device advertises it
+    /// (`modes` bit4 / `.pipeWrite`), auto-falling back to legacy direct-write (0x70) if the device
+    /// rejects or ignores the 0x80 START.
     public func uploadImage(_ packed: Data,
                             modes: TransmissionModes,
                             refresh: ODRefreshMode = .full,
                             etag: UInt32? = nil,
                             progress: ((ODUploadProgress) -> Void)? = nil) async throws {
         try await withExclusiveOp {
-            let policy = ODChunkPolicy(encrypted: secureChannel.isEstablished)
+            if modes.contains(.pipeWrite),
+               try await runPipeUpload(packed, modes: modes, refresh: refresh, etag: etag, progress: progress) {
+                return
+            }
             let uploader = DirectWriteUploader(
-                policy: policy,
-                router: router,
-                transmit: { [weak self] in try await self?.transmit($0) },
-                setExpectedOpcode: { [weak self] in self?.router.expectedOpcode = $0 }
+                policy: ODChunkPolicy(encrypted: secureChannel.isEstablished),
+                router: router, transmit: makeTransmit(), setExpectedOpcode: makeSetExpected()
             )
             try await uploader.run(packed: packed, modes: modes, refresh: refresh, etag: etag, progress: progress)
         }
+    }
+
+    /// Negotiate + run a PIPE upload. Returns `true` if PIPE handled the transfer, `false` to fall
+    /// back to legacy direct-write. Honors the `err 0x02` → retry-uncompressed handshake.
+    private func runPipeUpload(_ packed: Data, modes: TransmissionModes, refresh: ODRefreshMode,
+                               etag: UInt32?, progress: ((ODUploadProgress) -> Void)?) async throws -> Bool {
+        let pipe = PipeUploader(router: router, transmit: makeTransmit(), encrypted: secureChannel.isEstablished)
+        var compress = modes.contains(.streamingDecompression)
+
+        func wire(_ compressed: Bool) throws -> Data {
+            guard compressed else { return packed }
+            progress?(ODUploadProgress(bytesSent: 0, bytesTotal: packed.count, phase: .compressing))
+            return try ODDeflate.deflate(packed, level: 9, windowBits: 9)
+        }
+
+        var outcome = try await pipe.negotiate(totalSize: packed.count, compressed: compress, partial: nil)
+        if case .retryUncompressed = outcome {
+            compress = false
+            outcome = try await pipe.negotiate(totalSize: packed.count, compressed: false, partial: nil)
+        }
+        guard case .negotiated(let params) = outcome else { return false }   // fallback / second 0x02
+        try await pipe.run(wire: try wire(compress), params: params, compressed: compress, partial: false,
+                           refresh: refresh, newEtag: etag, progress: progress)
+        return true
     }
 
     // MARK: - Config transport (0x40 / 0x41 / 0x42)

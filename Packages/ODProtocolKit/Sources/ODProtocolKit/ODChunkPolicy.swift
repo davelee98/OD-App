@@ -18,4 +18,11 @@ struct ODChunkPolicy {
 
     /// Max leading compressed bytes that ride in the Image Start (after the 4-byte size header).
     var directWriteStartCompressedLeading: Int { directWriteStartPayload - 4 }   // 196 / 150
+
+    /// PIPE 0x81 data payload per frame given the negotiated effective frame size. Plaintext frame is
+    /// `cmd(2)+seq(1)+data`; encrypted wraps `[seq][data]` in the 31-byte CCM envelope, so the seq
+    /// costs one extra plaintext byte: `data <= frameEff - 32`.
+    func pipeDataSize(frameEff: Int) -> Int {
+        max(1, encrypted ? frameEff - 32 : frameEff - Int(PIPE_FRAME_OVERHEAD))
+    }
 }
