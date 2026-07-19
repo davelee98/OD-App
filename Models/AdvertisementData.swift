@@ -13,24 +13,24 @@ struct ODAdvertisementLayout: Equatable {
         guard let config else { return }
 
         for packet in config.toolbox.packets {
-            switch packet.packetType {
-            case 35: // sensor_data
+            switch ConfigPacketType(rawValue: UInt8(clamping: packet.packetType)) {
+            case .sensor:
                 let sensorType = Self.integer(packet.fields["sensor_type"])
                 let start = Self.integer(packet.fields["msd_data_start_byte"], default: 0xFF)
-                if sensorType == 4, sht40StartByte == nil {
+                if sensorType == Int(SensorType.sht40.rawValue), sht40StartByte == nil {
                     // The website treats 0xFF as the SHT40 legacy/default location.
                     sht40StartByte = start == 0xFF ? 7 : Self.valid(start, range: 0...8)
-                } else if sensorType == 5, bq27220StartByte == nil {
+                } else if sensorType == Int(SensorType.bq27220.rawValue), bq27220StartByte == nil {
                     bq27220StartByte = Self.valid(start, range: 0...10)
                 }
-            case 37: // binary_inputs
+            case .binaryInput:
                 if buttonDataByteIndex == nil {
                     let index = Self.integer(packet.fields["button_data_byte_index"], default: 0xFF)
                     buttonDataByteIndex = Self.valid(index, range: 0...10)
                 }
-            case 40: // touch_controller
+            case .touch:
                 let controller = Self.integer(packet.fields["touch_ic_type"])
-                if controller == 1, touchDataStartByte == nil {
+                if controller == Int(TouchIcType.gt911.rawValue), touchDataStartByte == nil {
                     let index = Self.integer(packet.fields["touch_data_start_byte"], default: 0xFF)
                     touchDataStartByte = Self.valid(index, range: 0...6)
                 }
@@ -127,18 +127,23 @@ struct ODAdvertisementData: Equatable {
         }
 
         let raw = Data(data.prefix(16))
-        let bytes = [UInt8](raw)
-        let companyID = UInt16(bytes[0]) | (UInt16(bytes[1]) << 8)
-        let dynamic = Array(bytes[2..<13])
-        let chipTemperatureByte = bytes[13]
-        let batteryLow = bytes[14]
-        let statusByte = bytes[15]
-        let battery10mV = Int(batteryLow) | (Int(statusByte & 0x01) << 8)
+        // Fixed 16-byte header decoded via the generated wire struct (source of truth for the layout);
+        // status flags/fields via the generated `MsdStatusBits`.
+        guard let msd = MsdAdvertisement(bytes: [UInt8](raw)) else {
+            throw ParseError.invalidLength(actual: data.count)
+        }
+        let companyID = msd.companyId
+        let dynamic = msd.dynamic
+        let chipTemperatureByte = msd.chipTemperature
+        let statusByte = msd.status
+        let statusBits = MsdStatusBits(rawValue: statusByte)
+        let battery10mV = Int(msd.batteryVoltageLow)
+            | (statusBits.contains(.batteryVoltageBit8) ? (1 << 8) : 0)
 
         let status = Status(
-            rebootFlag: statusByte & 0x02 != 0,
-            connectionRequested: statusByte & 0x04 != 0,
-            mainLoopCounter: Int((statusByte >> 4) & 0x0F)
+            rebootFlag: statusBits.contains(.rebootFlag),
+            connectionRequested: statusBits.contains(.connectionRequested),
+            mainLoopCounter: Int((statusByte & MsdStatusBits.mainLoopCounterMask) >> MsdStatusBits.mainLoopCounterShift)
         )
 
         let button = layout.buttonDataByteIndex.map { index in

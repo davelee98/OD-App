@@ -1,6 +1,11 @@
 import Foundation
 
 /// Native representation of the same schema-driven configuration used by the web Toolbox.
+///
+/// Config packets are decoded by the JS Toolbox engine into `ToolboxPacket` (a packet-type code +
+/// string fields), so this is a thin typed accessor over those fields — it does **not** parse the
+/// generated packed config structs natively. Packet-type codes come from the generated
+/// `ConfigPacketType` (`Generated/opendisplay_structs.swift`) rather than magic numbers.
 struct ODConfigModel: Equatable {
     var toolbox: ToolboxConfiguration
 
@@ -14,43 +19,44 @@ struct ODConfigModel: Equatable {
     }
 
     var displayWidth: Int {
-        get { integer(type: 32, field: "pixel_width") }
-        set { set(type: 32, field: "pixel_width", value: String(newValue)) }
+        get { integer(.display, field: "pixel_width") }
+        set { set(.display, field: "pixel_width", value: String(newValue)) }
     }
 
     var displayHeight: Int {
-        get { integer(type: 32, field: "pixel_height") }
-        set { set(type: 32, field: "pixel_height", value: String(newValue)) }
+        get { integer(.display, field: "pixel_height") }
+        set { set(.display, field: "pixel_height", value: String(newValue)) }
     }
 
     var colorScheme: UInt8 {
-        get { UInt8(clamping: integer(type: 32, field: "color_scheme")) }
-        set { set(type: 32, field: "color_scheme", value: String(newValue)) }
+        get { UInt8(clamping: integer(.display, field: "color_scheme")) }
+        set { set(.display, field: "color_scheme", value: String(newValue)) }
     }
 
     var refreshMode: UInt8 {
-        get { UInt8(clamping: integer(type: 32, field: "partial_update_support")) }
-        set { set(type: 32, field: "partial_update_support", value: String(newValue)) }
+        get { UInt8(clamping: integer(.display, field: "partial_update_support")) }
+        set { set(.display, field: "partial_update_support", value: String(newValue)) }
     }
 
-    /// Bitfield reported by the device: bit0 = streaming decompression support, bit1 = zip support.
-    /// Image uploads may only be deflate-compressed (with a sized Image Start header) when both bits are set —
-    /// otherwise the device expects a bare Image Start opcode followed by raw pixel chunks.
+    /// Bitfield reported by the device (bits are `TransmissionModes`): bit0 = streaming decompression
+    /// support, bit1 = zip support. Image uploads may only be deflate-compressed (with a sized Image
+    /// Start header) when both bits are set — otherwise the device expects a bare Image Start opcode
+    /// followed by raw pixel chunks. Returned as the raw byte because it's forwarded to the JS layer.
     var transmissionModes: UInt8 {
-        UInt8(clamping: integer(type: 32, field: "transmission_modes"))
+        UInt8(clamping: integer(.display, field: "transmission_modes"))
     }
 
     var deepSleepEnabled: Bool {
-        get { integer(type: 4, field: "deep_sleep_time_seconds") > 0 }
-        set { set(type: 4, field: "deep_sleep_time_seconds", value: newValue ? "60" : "0") }
+        get { integer(.power, field: "deep_sleep_time_seconds") > 0 }
+        set { set(.power, field: "deep_sleep_time_seconds", value: newValue ? "60" : "0") }
     }
 
     var displayWidthMM: Int {
-        integer(type: 32, field: "active_width_mm")
+        integer(.display, field: "active_width_mm")
     }
 
     var displayHeightMM: Int {
-        integer(type: 32, field: "active_height_mm")
+        integer(.display, field: "active_height_mm")
     }
 
     var displayDiagonalInches: Double? {
@@ -82,34 +88,35 @@ struct ODConfigModel: Equatable {
     }
 
     var pskHex: String {
-        get { value(type: 39, field: "encryption_key") ?? "" }
+        get { value(.security, field: "encryption_key") ?? "" }
         set {
             if newValue.isEmpty {
-                toolbox.remove(type: 39)
+                toolbox.remove(type: Int(ConfigPacketType.security.rawValue))
             } else {
-                set(type: 39, field: "encryption_enabled", value: "1")
-                set(type: 39, field: "encryption_key", value: newValue)
-                set(type: 39, field: "flags", value: "2")
-                set(type: 39, field: "reset_pin", value: "0xff")
+                set(.security, field: "encryption_enabled", value: "1")
+                set(.security, field: "encryption_key", value: newValue)
+                set(.security, field: "flags", value: "2")
+                set(.security, field: "reset_pin", value: "0xff")
             }
         }
     }
 
-    private func value(type: Int, field: String) -> String? {
-        toolbox.packets.first(where: { $0.packetType == type })?.fields[field]
+    private func value(_ type: ConfigPacketType, field: String) -> String? {
+        toolbox.packets.first(where: { $0.packetType == Int(type.rawValue) })?.fields[field]
     }
 
-    private func integer(type: Int, field: String) -> Int {
-        let raw = value(type: type, field: field) ?? "0"
+    private func integer(_ type: ConfigPacketType, field: String) -> Int {
+        let raw = value(type, field: field) ?? "0"
         if raw.lowercased().hasPrefix("0x") { return Int(raw.dropFirst(2), radix: 16) ?? 0 }
         return Int(raw) ?? 0
     }
 
-    private mutating func set(type: Int, field: String, value: String) {
-        if let index = toolbox.packets.firstIndex(where: { $0.packetType == type }) {
+    private mutating func set(_ type: ConfigPacketType, field: String, value: String) {
+        let code = Int(type.rawValue)
+        if let index = toolbox.packets.firstIndex(where: { $0.packetType == code }) {
             toolbox.packets[index].fields[field] = value
         } else {
-            toolbox.packets.append(ToolboxPacket(packetType: type, fields: [field: value]))
+            toolbox.packets.append(ToolboxPacket(packetType: code, fields: [field: value]))
         }
     }
 }
