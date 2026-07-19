@@ -478,13 +478,13 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             guard notification.count >= 2 else { return }
             let responseType = notification[notification.startIndex]
             let command = notification[notification.startIndex + 1]
-            guard command == 0x41 || command == 0x42 else { return }
-            if responseType == 0xFF {
+            guard command == RESP_CONFIG_WRITE || command == RESP_CONFIG_CHUNK else { return }
+            if responseType == RESP_NACK {
                 self?.trace("writeConfig chunk NACK received (command=0x\(String(format: "%02X", command)))", level: .error)
                 finish(false)
                 return
             }
-            guard responseType == 0x00 else { return }
+            guard responseType == RESP_ACK else { return }
             chunksAcked += 1
             self?.trace("writeConfig chunk ack \(chunksAcked)/\(expectedChunks) (command=0x\(String(format: "%02X", command)))")
             if chunksAcked >= expectedChunks {
@@ -788,7 +788,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // ACK, or any raw 0x__71 packet — the packet is intentional and must stay visible, so keying
         // the guard on `uploadPhase == .sending` (not just the opcode) no longer hides the Tester's
         // own sends. A Debug launch flag still restores every chunk during uploads.
-        let isImageChunk = data.count >= 2 && data[1] == 0x71
+        let isImageChunk = data.count >= 2 && data[1] == UInt8(CMD_DIRECT_WRITE_DATA & 0xFF)
         guard BLELogging.detailedPayloads || !(isImageChunk && uploadPhase == .sending) else { return }
         let entry = LogEntry(direction: direction, data: data, label: label)
         let arrow = direction == .sent ? "→" : "←"
@@ -804,7 +804,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     private func responseLabel(_ data: Data) -> String? {
         guard data.count >= 2 else { return nil }
-        let status = data[0] == 0x00 ? "OK" : (data[0] == 0xFF ? "ERR" : nil)
+        let status = data[0] == RESP_ACK ? "OK" : (data[0] == RESP_NACK ? "ERR" : nil)
         return status
     }
 }
