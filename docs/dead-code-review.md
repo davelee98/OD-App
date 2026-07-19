@@ -43,6 +43,7 @@ All paths are relative to the repo root (`OD App/`).
 ### 6. NFC command cluster — no callers, no UI (possibly intentional device API)
 `BLE/ODDevice.swift:562 writeNFC(type:payload:)`, its four builders `ODCommands.nfcWriteSingle/Start/Chunk/End` (`Protocol/ODCommands.swift:14-37`), and `Data.chunked(size:)` (`ODCommands.swift:43`, used only by `writeNFC`). `writeNFC` has 0 callers across app+Tests, so the whole chain is unreachable. (The `OD.Cmd.nfc` opcode `0x0082` itself *is* still used — it appears in the BLETester preset-command list — so only the higher-level write helpers are dead.)
 **Action:** confirm intent; if no NFC feature is planned, delete `writeNFC` + the four builders + `chunked`.
+**Resolved:** deleted — the whole `writeNFC` chain + `Data.chunked` removed; `OD.Cmd.nfc` (bare opcode) kept.
 
 ### 7. Unused `ODConfigModel` accessors
 `Models/ConfigModel.swift`: `refreshMode` (31), `deepSleepEnabled` (43), `displayDiagonalInches` (56), `batteryMSDByteIndex` (80), `pskHex` (84). Each has 0 references. Sibling accessors (`displayWidth`/`colorScheme`/`transmissionModes`) *are* used, so the type isn't dead — just these members.
