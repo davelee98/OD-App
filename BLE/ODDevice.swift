@@ -29,7 +29,12 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// source of truth — `isUploading` is derived from it, so there is exactly one writer.
     enum UploadPhase: Equatable { case idle, preparing, sending, succeeded, failed(String) }
 
-    @Published var uploadPhase: UploadPhase = .idle
+    @Published var uploadPhase: UploadPhase = .idle {
+        didSet {
+            // Emit the quiet image-write summary once the stream ends (success, failure, or drop).
+            if oldValue == .sending, uploadPhase != .sending { finishImageWriteMeter() }
+        }
+    }
     @Published var uploadStatus: String?          // human-readable line forwarded from ble-common.js
     @Published var uploadProgress: Double = 0
     @Published var uploadByteCount: Int?          // packed image payload size, for the terminal summary
@@ -80,6 +85,17 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         return client
     }
     private var uploadTask: Task<Void, Never>?
+
+    /// Quiet image-write logging (mirrors the firmware's `imageWriteLogQuiet*`): an upload streams
+    /// hundreds of 0x71/0x81 data frames + acks, so instead of one log line each we emit the first
+    /// frame in full, a 5%-step progress meter, and a one-line summary at completion.
+    private struct ImageWriteLog {
+        var startTime: Date?
+        var frames = 0
+        var lastStep = -1      // last 5% step emitted (pct / 5)
+        var firstLogged = false
+    }
+    private var imageWriteLog = ImageWriteLog()
 
     /// Native ODProtocolKit paths (upload, config read/write, firmware/MSD, commands) are used unless
     /// `-ODUseJSUpload` forces the legacy ble-common.js route (bring-up safety net).
@@ -206,12 +222,18 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             self.trace("GATT ready; changing appState \(self.connectionState) → connected", level: .info)
             self.runtime?.setConnected(true)
             self.connectionState = .connected
-            self.readFirmware()
             // Auto-read config from the point the GATT link is actually usable — not from a view's
             // onChange, which fires while `didConnect` still has the link in `.connecting` and the JS
             // engine rejects the read with "Not connected". Every surface (Add sheet, Composer,
             // Toolbox) gets the result for free; a cached value is refreshed on each reconnect.
-            self.readConfig()
+            //
+            // Sequence config → firmware: both route through the native client's single-operation
+            // gate, so firing them back-to-back made the second throw `.busy` (the firmware read held
+            // the gate while it awaited its round-trip, so the config read was rejected and `config`
+            // stayed nil until a surface re-triggered it). Config is the critical path (it gates the
+            // Composer/Add/Toolbox), so read it first, then read the cosmetic firmware version once
+            // the gate frees. The firmware read runs on both success and failure of the config read.
+            self.readConfig { [weak self] _ in self?.readFirmware() }
         }
         transport.onNotification = { [weak self] data in
             guard let self else { return }
@@ -721,9 +743,9 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         uploadStatus = nil
         uploadProgress = 0
         uploadPhase = .sending
-        // One-line notice so the log doesn't look dead while the per-chunk image traffic is hidden.
+        // One-line notice so the log doesn't look dead while the per-chunk image traffic is quieted.
         if !BLELogging.detailedPayloads {
-            trace("Image-data (0x0071) chunks are hidden during upload; launch with the detailed-payloads flag to show them.")
+            trace("Image-data (0x0071/0x0081) frames are quieted during upload — showing the first frame, 5% steps, and a summary; launch with the detailed-payloads flag to show every frame.")
         }
         let modes = config?.transmissionModes ?? 0
         armUploadWatchdog()
@@ -921,18 +943,53 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     private func appendLog(direction: LogEntry.Direction, data: Data, label: String?) {
-        // Suppress the image-data (0x0071) chunk flood only *during an active upload*, where a real
-        // photo send streams hundreds of chunks and would otherwise cause hundreds of main-thread
-        // log updates. Outside an upload — a Tester send of the "Image Data (0x0071)" preset, its
-        // ACK, or any raw 0x__71 packet — the packet is intentional and must stay visible, so keying
-        // the guard on `uploadPhase == .sending` (not just the opcode) no longer hides the Tester's
-        // own sends. A Debug launch flag still restores every chunk during uploads.
-        let isImageChunk = data.count >= 2 && data[1] == UInt8(CMD_DIRECT_WRITE_DATA & 0xFF)
-        guard BLELogging.detailedPayloads || !(isImageChunk && uploadPhase == .sending) else { return }
+        // Collapse the image-data chunk flood *during an active upload* into the quiet meter (first
+        // frame + 5% steps + summary). A real photo send streams hundreds of 0x71 (direct-write) /
+        // 0x81 (pipe) data frames and their acks/SACKs, which would otherwise cause hundreds of
+        // main-thread log updates. Outside an upload — a Tester send of the "Image Data" preset, its
+        // ACK, or any raw 0x__71/0x__81 packet — the packet is intentional and stays visible, so the
+        // guard keys on `uploadPhase == .sending`, not just the opcode. A Debug launch flag restores
+        // every frame during uploads.
+        let opcode = data.count >= 2 ? data[1] : 0
+        let isStreamFrame = opcode == UInt8(CMD_DIRECT_WRITE_DATA & 0xFF) || opcode == UInt8(CMD_PIPE_WRITE_DATA & 0xFF)
+        if !BLELogging.detailedPayloads, uploadPhase == .sending, isStreamFrame {
+            meterImageWriteFrame(direction: direction, data: data)
+            return
+        }
         let entry = LogEntry(direction: direction, data: data, label: label)
         let arrow = direction == .sent ? "→" : "←"
         ODLog.ble.debug("\(arrow, privacy: .public) \(label ?? "", privacy: .public) \(data.hexString, privacy: .public)")
         logHandler(entry)
+    }
+
+    /// Meter one image-write stream frame. Only the host's SENT data frames advance the meter; device
+    /// acks/SACKs are silent. Logs the first frame in full, then a line at each new 5% step.
+    private func meterImageWriteFrame(direction: LogEntry.Direction, data: Data) {
+        guard direction == .sent else { return }
+        if imageWriteLog.startTime == nil { imageWriteLog = ImageWriteLog(startTime: Date()) }
+        imageWriteLog.frames += 1
+        if !imageWriteLog.firstLogged {
+            imageWriteLog.firstLogged = true
+            trace("image write: frame 1 (\(data.count)B) hex=\(data.hexString); per-frame log quieted (first + 5% steps + summary)")
+            return
+        }
+        let pct = Int(min(1, uploadProgress) * 100)
+        let step = pct / 5
+        if pct < 100, step > imageWriteLog.lastStep {
+            imageWriteLog.lastStep = step
+            trace("image write: \(pct)% (\(imageWriteLog.frames) frames)")
+        }
+    }
+
+    /// Emit the one-line completion summary and reset the meter (fired when the upload leaves `.sending`).
+    private func finishImageWriteMeter() {
+        defer { imageWriteLog = ImageWriteLog() }
+        guard let start = imageWriteLog.startTime, imageWriteLog.frames > 0 else { return }
+        let elapsed = Date().timeIntervalSince(start)
+        let bytes = uploadByteCount ?? 0
+        let rate = elapsed > 0 ? Double(bytes) / 1024 / elapsed : 0
+        trace(String(format: "image write complete: %d frames, %d bytes, %.2fs, %.1f KB/s",
+                     imageWriteLog.frames, bytes, elapsed, rate))
     }
 
     private func trace(_ message: String, level: OSLogType = .debug) {
