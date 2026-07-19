@@ -18,11 +18,13 @@ enum OD {
     /// those vendors don't false-positive.
     static let namePrefixes: [String] = ["OD"]
     static let bleChunkSize       = 230
-    /// Chunk size ble-common.js uses for chunked config writes (`writeConfigChunked`,
-    /// `const chunkSize = 200`). `ODDevice.writeConfig` predicts its expected ACK count from
-    /// this, so it must track the bundled JS exactly — pinned by BLEChunkSizeTests. Distinct
-    /// from `bleChunkSize`, which governs image-data transport chunks.
-    static let configWriteChunkSize = 200
+    /// Chunk size for chunked config writes. Derived from the canonical wire contract
+    /// `CONFIG_CHUNK_SIZE` (`Generated/opendisplay_protocol.swift`); ble-common.js's
+    /// `writeConfigChunked` mirrors the same value, and `ODDevice.writeConfig` predicts its
+    /// expected ACK count from it. `BLEChunkSizeTests` pins it to the bundled JS, tying Swift,
+    /// the generated contract, and the JS to one value. Distinct from `bleChunkSize`, which
+    /// governs image-data transport chunks.
+    static let configWriteChunkSize = Int(CONFIG_CHUNK_SIZE)
 
     /// Wire command opcodes. Raw values mirror the canonical `CMD_*` constants in the vendored
     /// `Generated/opendisplay_protocol.swift` (Swift enum raw values must be literals, so they can't
