@@ -18,3 +18,11 @@ xcuserdata/
 # Private, machine-specific Xcode configuration
 Local.xcconfig
 Secrets.xcconfig
+
+# Xcode build / Distribute-Export artifacts (IPAs, archives, and the timestamped
+# export folders the Organizer creates, e.g. "OD App 2026-07-18 19-58-36/")
+*.ipa
+*.xcarchive/
+OD App [0-9]*/
+build/
+DerivedData/
