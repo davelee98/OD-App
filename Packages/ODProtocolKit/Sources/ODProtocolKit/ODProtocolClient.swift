@@ -70,6 +70,43 @@ public final class ODProtocolClient {
         }
     }
 
+    // MARK: - Config transport (0x40 / 0x41 / 0x42)
+
+    /// Read the raw config blob (transport only; hand to the toolbox engine for content decode).
+    public func readConfigBlob(progress: ((Double) -> Void)? = nil) async throws -> Data {
+        try await withExclusiveOp { try await configTransfer().read(progress: progress) }
+    }
+
+    /// Write a raw config blob (chunked with per-chunk ACK).
+    public func writeConfigBlob(_ blob: Data, progress: ((Double) -> Void)? = nil) async throws {
+        try await withExclusiveOp { try await configTransfer().write(blob, progress: progress) }
+    }
+
+    // MARK: - Firmware / MSD / simple commands
+
+    public func firmwareVersion() async throws -> (major: Int, minor: Int, sha: String?) {
+        try await withExclusiveOp { try await simpleCommands().firmwareVersion() }
+    }
+
+    public func readMSD() async throws -> Data {
+        try await withExclusiveOp { try await simpleCommands().readMSD() }
+    }
+
+    /// Reboot / enter-DFU / deep-sleep / power-off / raw — fire-and-forget.
+    public func send(_ command: ODSimpleCommand) async throws {
+        try await withExclusiveOp { try await simpleCommands().send(command) }
+    }
+
+    private func makeTransmit() -> (Data) async throws -> Void { { [weak self] in try await self?.transmit($0) } }
+    private func makeSetExpected() -> (UInt8?) -> Void { { [weak self] in self?.router.expectedOpcode = $0 } }
+    private func simpleCommands() -> SimpleCommands {
+        SimpleCommands(router: router, transmit: makeTransmit(), setExpectedOpcode: makeSetExpected())
+    }
+    private func configTransfer() -> ConfigTransfer {
+        ConfigTransfer(router: router, policy: ODChunkPolicy(encrypted: false),
+                       transmit: makeTransmit(), setExpectedOpcode: makeSetExpected())
+    }
+
     /// Send a raw pre-built packet (BLE Tester / engineering tools). Fire-and-forget.
     public func sendRaw(_ data: Data) async throws {
         try await withExclusiveOp { try await transmit(data) }
