@@ -546,7 +546,7 @@ struct ComposerView: View {
                 .font(.caption).foregroundStyle(.orange)
 
             Picker("Color mode", selection: $colorScheme) {
-                ForEach(ColorScheme.allCases) { scheme in
+                ForEach(ColorScheme.appSupported, id: \.rawValue) { scheme in
                     Text(scheme.displayName).tag(scheme.rawValue)
                 }
             }

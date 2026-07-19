@@ -29,20 +29,23 @@ canonical constants. `OD.Cmd` opcodes stay a Swift enum (raw values must be lite
 to the generated `CMD_*` by `ProtocolOpcodeTests`; `configWriteChunkSize` is pinned to the bundled
 JS by `BLEChunkSizeTests`, now transitively tying JS ↔ generated ↔ Swift to one value.
 
-## ⛔ Blocked — needs the structs file compiled in first
+## ✅ Done (step 2) — `ColorScheme` retired, structs file compiled in
 
-`opendisplay_structs.swift` can't be added to the target until the app's hand-rolled `ColorScheme`
-is retired (invalid-redeclaration collision). And that retirement is **not a clean swap**:
+The app's hand-rolled `enum ColorScheme` was deleted and replaced by the generated one; the app-side
+affordances (`displayName`, `appSupported`) live in an `extension ColorScheme` in
+`BLE/ODConstants.swift`. `opendisplay_structs.swift` is now compiled into the target (`ColorScheme`
+was its only collision). Notes:
 
-- Generated `ColorScheme` uses different case names (`mono` vs `blackWhite`, `bwr` vs
-  `blackWhiteRed`, …), adds five cases (`sevenColor`, `bwgbrySplit`, `rgb565/888/16bpc`), and has no
-  `Identifiable` / `displayName` / `bitsPerPixel`.
-- `ComposerView`'s `ForEach(ColorScheme.allCases)` picker would then render the non-epaper RGB cases.
+- Case names changed (`.blackWhite` → `.mono`, `.sixColor` → `.bwgbry`, …); raw values 0…6 are
+  unchanged, so persisted `SavedDisplayEntity.colorScheme` codes and `ImageProcessor`'s raw-code
+  keys still work.
+- The generated enum adds `sevenColor`/`bwgbrySplit`/`rgb565`/`rgb888`/`rgb16bpc`, so the composer
+  picker uses `ColorScheme.appSupported` (the epaper subset 0…6) instead of `.allCases`.
+- The dead `bitsPerPixel` (dead-code review §8) was dropped, not ported.
+- `ColorSchemeTests` pins `appSupported`, the display names, and raw-value reconstruction.
 
-**Follow-up PR (step 2):** repoint `.blackWhite`→`.mono` etc. across `ContentView`/`ComposerView`/
-`ImageProcessor`, add `displayName`/`bitsPerPixel`/`Identifiable` as an extension on the generated
-enum, restrict the picker to the epaper subset, delete the app's `ColorScheme`, then compile
-`opendisplay_structs.swift` in. Once compiled in, these further rewires unlock:
+### Remaining struct rewires (now unblocked)
+With `opendisplay_structs.swift` compiled in, these hand-maintained forms can be migrated next:
 
 - `OD_CONFIG_VERSION` / `OD_CONFIG_MINOR_VERSION` / `OD_CONFIG_CRC_POLY` / `OD_CONFIG_CRC_INIT` —
   note `ToolboxData.minorVersion` is the **config.yaml schema** version, a *different* concept from

@@ -24,22 +24,19 @@ the same discipline as the firmware header vendoring.
 scripts/sync-protocol-swift.sh /path/to/opendisplay-protocol
 ```
 
-## ⚠️ Not yet in the compile target
+## Compiled into the target
 
-Both files are vendored **but not added to the "OD App" target's Sources** — this is the
-vendoring/scaffolding step; wiring them in is a follow-up migration PR. Their situations differ:
+Both files are now in the "OD App" target's Sources:
 
-- **`opendisplay_protocol.swift` — collision-free.** Its flat `CMD_*` / `RESP_*` / `AUTH_*`
-  constants don't clash with anything in the app (opcodes there are namespaced under `OD.Cmd`).
-  It can be added to the target as-is; the migration then repoints `OD.Cmd`/`ODConstants` usages
-  onto these constants. Notably it carries `CMD_NFC_ENDPOINT = 0x0083` — the correct opcode the
-  app's `OD.Cmd.nfc = 0x0082` is two protocol versions stale against.
-- **`opendisplay_structs.swift` — one collision.** It defines `public enum ColorScheme`, which
-  collides with the app's hand-rolled `enum ColorScheme` in `BLE/ODConstants.swift` (the duplicated
-  color-enum the protocol repo's `docs/shared-types-plan.md` flags). Compiling both into one module
-  is an "invalid redeclaration" error, so the app's `ColorScheme` must be retired first.
+- **`opendisplay_protocol.swift`** — compiled in; native protocol constants (`RESP_*`, `CMD_*`,
+  `CONFIG_CHUNK_SIZE`, …) are used directly by `ODDevice`/`ODConstants`, and `OD.Cmd` is pinned to
+  the generated `CMD_*` by `ProtocolOpcodeTests`. This fixed the stale `OD.Cmd.nfc` opcode
+  (`0x0082` → `CMD_NFC_ENDPOINT 0x0083`).
+- **`opendisplay_structs.swift`** — compiled in; the app's hand-rolled `ColorScheme` was retired in
+  favor of the generated enum (app-side `displayName` / `appSupported` live in an extension in
+  `BLE/ODConstants.swift`), pinned by `ColorSchemeTests`.
 
-**Migration follow-up** (separate PR): add `opendisplay_protocol.swift` to the target and repoint
-opcode usages; retire the hand-rolled `ColorScheme` (and, over time, `TransmissionModes`, the config
-structs, and the MSD-advertisement parsing) onto the generated types, repoint call sites
-(`ContentView`, `ComposerView`), then add `opendisplay_structs.swift` to the target.
+### Still hand-maintained (future rewires onto the generated structs)
+`TransmissionModes`, the config structs, and the MSD-advertisement parsing (`AdvertisementData.swift`)
+still have hand-written forms; migrating them onto `ManufacturerData`/`MsdAdvertisement`/the config
+structs/enums here is the remaining work. See `docs/protocol-constants-migration.md`.

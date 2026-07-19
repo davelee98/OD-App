@@ -108,40 +108,33 @@ struct LogEntry: Identifiable {
     }
 }
 
-// MARK: - Color Scheme
+// MARK: - Color Scheme (app UI extensions on the generated wire enum)
 
-enum ColorScheme: UInt8, CaseIterable, Identifiable {
-    case blackWhite        = 0
-    case blackWhiteRed     = 1
-    case blackWhiteYellow  = 2
-    case blackWhiteRedYellow = 3
-    case sixColor          = 4
-    case fourGray          = 5
-    case sixteenGray       = 6
-
-    var id: UInt8 { rawValue }
+// `ColorScheme` itself is generated from the wire contract in
+// `Generated/opendisplay_structs.swift` — its cases and raw values are the on-wire scheme codes.
+// These app-side extensions add the UI affordances the app needs: a display name and the e-paper
+// subset the composer offers (the generated enum also carries non-epaper RGB modes and split/7-color
+// variants the app doesn't compose for).
+extension ColorScheme {
+    /// Schemes the composer's color-mode picker offers — the e-paper modes the app can dither and
+    /// pack (`ImageProcessor` handles raw codes 0…6). Excludes the generated `sevenColor`,
+    /// `bwgbrySplit`, and RGB (`rgb565`/`rgb888`/`rgb16bpc`) cases, which the app doesn't compose for.
+    static let appSupported: [ColorScheme] = [.mono, .bwr, .bwy, .bwry, .bwgbry, .gray4, .gray16]
 
     var displayName: String {
         switch self {
-        case .blackWhite:          return "Black & White"
-        case .blackWhiteRed:       return "B/W + Red"
-        case .blackWhiteYellow:    return "B/W + Yellow"
-        case .blackWhiteRedYellow: return "B/W + Red + Yellow"
-        case .sixColor:            return "6-Color"
-        case .fourGray:            return "4-Grayscale"
-        case .sixteenGray:         return "16-Grayscale"
-        }
-    }
-
-    var bitsPerPixel: Int {
-        switch self {
-        case .blackWhite:          return 1
-        case .blackWhiteRed:       return 1  // 2 bitplanes of 1bpp
-        case .blackWhiteYellow:    return 1  // 2 bitplanes of 1bpp
-        case .blackWhiteRedYellow: return 2
-        case .sixColor:            return 4
-        case .fourGray:            return 2
-        case .sixteenGray:         return 4
+        case .mono:        return "Black & White"
+        case .bwr:         return "B/W + Red"
+        case .bwy:         return "B/W + Yellow"
+        case .bwry:        return "B/W + Red + Yellow"
+        case .bwgbry:      return "6-Color"
+        case .gray4:       return "4-Grayscale"
+        case .gray16:      return "16-Grayscale"
+        case .sevenColor:  return "7-Color"
+        case .bwgbrySplit: return "6-Color (Split)"
+        case .rgb565:      return "RGB565"
+        case .rgb888:      return "RGB888"
+        case .rgb16bpc:    return "RGB 16bpc"
         }
     }
 }
