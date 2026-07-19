@@ -557,22 +557,6 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
-    // MARK: - Device controls
-
-    func writeNFC(type: UInt8, payload: Data) {
-        let chunkSize = 120
-        if payload.count <= chunkSize {
-            sendRaw(ODCommands.nfcWriteSingle(type: type, payload: payload), label: "NFC Write")
-            return
-        }
-        sendRaw(ODCommands.nfcWriteStart(type: type, totalLength: UInt16(clamping: payload.count)),
-                label: "NFC Write Start")
-        for chunk in payload.chunked(size: chunkSize) {
-            sendRaw(ODCommands.nfcWriteChunk(chunk), label: "NFC Chunk")
-        }
-        sendRaw(ODCommands.nfcWriteEnd(), label: "NFC Write End")
-    }
-
     // MARK: - Image upload
 
     /// Show the send overlay the instant Send is tapped, before the (possibly slow) full-resolution

@@ -55,8 +55,9 @@ With `opendisplay_structs.swift` compiled in, these hand-maintained forms can be
 - `ICType` / `Rotation` / `TransmissionModes` / `PowerMode` / enums consumed by `ConfigModel` /
   `ToolboxData`.
 
-## 🗑️ Delete, don't rewire — dead + stale
+## 🗑️ Deleted, not rewired — dead + stale ✅
 The NFC command builders (`ODCommands.nfcWriteSingle/Start/Chunk/End`, `ODDevice.writeNFC`,
-`Data.chunked`) use the old `0x0082 + 0x01/0x10/0x11/0x12` framing. They're **unused** (dead-code
-review §6) *and* the sub-protocol is stale vs. the generated `NFC_SUB_*` / v2.0 endpoint. Remove them
-rather than rewire (tracked in `docs/dead-code-review.md`).
+`Data.chunked`) used the old `0x0082 + 0x01/0x10/0x11/0x12` framing — **unused** (dead-code review §6)
+*and* stale vs. the generated `NFC_SUB_*` / v2.0 endpoint. **Removed** rather than rewired.
+`OD.Cmd.nfc` (the bare opcode, now `0x0083`) is kept — it's still used by the BLE Tester and pinned
+by `ProtocolOpcodeTests`.
