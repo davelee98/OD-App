@@ -645,6 +645,24 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             lastError = "Authentication key must contain exactly 16 bytes"
             return
         }
+
+        if useNativeProtocol {
+            // Native 0x50 handshake; the client owns the timeout and, on success, transparently
+            // CCM-wraps all subsequent traffic (config/upload/commands already route through it).
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.protocolClient.authenticate(masterKey: psk)
+                    self.isAuthenticated = true
+                } catch {
+                    self.isAuthenticated = false
+                    self.lastError = error.localizedDescription
+                    self.trace("authenticate (native) failed: \(error.localizedDescription)", level: .error)
+                }
+            }
+            return
+        }
+
         var didComplete = false
         authWatchdog?.cancel()
         authWatchdog = makeWatchdog(operation: "authenticate") { [weak self] in
