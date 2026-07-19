@@ -61,6 +61,8 @@
 		010000000000000000000063 /* cat_800x480.rgb in Resources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000063 /* cat_800x480.rgb */; };
 		010000000000000000000064 /* cat__floyd_steinberg_mono_raw.bin in Resources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000064 /* cat__floyd_steinberg_mono_raw.bin */; };
 		010000000000000000000065 /* EpaperDithering.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000061 /* EpaperDithering.xcframework */; };
+		010000000000000000000072 /* opendisplay_protocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000072 /* opendisplay_protocol.swift */; };
+		010000000000000000000073 /* ProtocolOpcodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000073 /* ProtocolOpcodeTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -134,6 +136,7 @@
 		020000000000000000000070 /* opendisplay_structs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = opendisplay_structs.swift; sourceTree = "<group>"; };
 		020000000000000000000072 /* opendisplay_protocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = opendisplay_protocol.swift; sourceTree = "<group>"; };
 		020000000000000000000071 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		020000000000000000000073 /* ProtocolOpcodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolOpcodeTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -291,6 +294,7 @@
 				0200000000000000000000A4 /* BLEChunkSizeTests.swift */,
 				0200000000000000000000B1 /* CanvasCoordinateTests.swift */,
 				020000000000000000000062 /* RustDitherParityTests.swift */,
+				020000000000000000000073 /* ProtocolOpcodeTests.swift */,
 				03000000000000000000000B /* Fixtures */,
 			);
 			path = Tests;
@@ -469,6 +473,7 @@
 				01000000000000000000000E /* ConfigModel.swift in Sources */,
 				010000000000000000000054 /* AdvancedSettingsView.swift in Sources */,
 				010000000000000000000021 /* ImageProcessor.swift in Sources */,
+				010000000000000000000072 /* opendisplay_protocol.swift in Sources */,
 				010000000000000000000060 /* RustDither.swift in Sources */,
 				010000000000000000000022 /* ToolboxView.swift in Sources */,
 				010000000000000000000024 /* ODLogoView.swift in Sources */,
@@ -491,6 +496,7 @@
 				0100000000000000000000A4 /* BLEChunkSizeTests.swift in Sources */,
 				0100000000000000000000B1 /* CanvasCoordinateTests.swift in Sources */,
 				010000000000000000000062 /* RustDitherParityTests.swift in Sources */,
+				010000000000000000000073 /* ProtocolOpcodeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
