@@ -12,6 +12,7 @@
 		010000000000000000000003 /* BLEManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000003 /* BLEManager.swift */; };
 		010000000000000000000004 /* ODConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000004 /* ODConstants.swift */; };
 		010000000000000000000005 /* ODDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000005 /* ODDevice.swift */; };
+		010000000000000000000080 /* CoreBluetoothLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000080 /* CoreBluetoothLink.swift */; };
 		010000000000000000000006 /* ODCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000006 /* ODCommands.swift */; };
 		010000000000000000000007 /* ODAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000007 /* ODAuth.swift */; };
 		010000000000000000000008 /* ODConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000008 /* ODConfig.swift */; };
@@ -55,14 +56,13 @@
 		0100000000000000000000B0 /* CanvasCoordinates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000B0 /* CanvasCoordinates.swift */; };
 		0100000000000000000000B1 /* CanvasCoordinateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000B1 /* CanvasCoordinateTests.swift */; };
 		EC7030B92FEF0203009DC919 /* CryptoSwift in Frameworks */ = {isa = PBXBuildFile; productRef = EC7030B82FEF0203009DC919 /* CryptoSwift */; };
+		0D0000000000000000000003 /* ODProtocolKit in Frameworks */ = {isa = PBXBuildFile; productRef = 0D0000000000000000000002 /* ODProtocolKit */; };
 		010000000000000000000060 /* RustDither.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000060 /* RustDither.swift */; };
 		010000000000000000000061 /* EpaperDithering.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000061 /* EpaperDithering.xcframework */; };
 		010000000000000000000062 /* RustDitherParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000062 /* RustDitherParityTests.swift */; };
 		010000000000000000000063 /* cat_800x480.rgb in Resources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000063 /* cat_800x480.rgb */; };
 		010000000000000000000064 /* cat__floyd_steinberg_mono_raw.bin in Resources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000064 /* cat__floyd_steinberg_mono_raw.bin */; };
 		010000000000000000000065 /* EpaperDithering.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000061 /* EpaperDithering.xcframework */; };
-		010000000000000000000072 /* opendisplay_protocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000072 /* opendisplay_protocol.swift */; };
-		010000000000000000000070 /* opendisplay_structs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000070 /* opendisplay_structs.swift */; };
 		010000000000000000000073 /* ProtocolOpcodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000073 /* ProtocolOpcodeTests.swift */; };
 		010000000000000000000074 /* ColorSchemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000074 /* ColorSchemeTests.swift */; };
 		010000000000000000000075 /* AdvertisementDataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000075 /* AdvertisementDataTests.swift */; };
@@ -84,6 +84,7 @@
 		020000000000000000000003 /* BLEManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEManager.swift; sourceTree = "<group>"; };
 		020000000000000000000004 /* ODConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODConstants.swift; sourceTree = "<group>"; };
 		020000000000000000000005 /* ODDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODDevice.swift; sourceTree = "<group>"; };
+		020000000000000000000080 /* CoreBluetoothLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBluetoothLink.swift; sourceTree = "<group>"; };
 		020000000000000000000006 /* ODCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODCommands.swift; sourceTree = "<group>"; };
 		020000000000000000000007 /* ODAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODAuth.swift; sourceTree = "<group>"; };
 		020000000000000000000008 /* ODConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODConfig.swift; sourceTree = "<group>"; };
@@ -136,8 +137,6 @@
 		020000000000000000000062 /* RustDitherParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustDitherParityTests.swift; sourceTree = "<group>"; };
 		020000000000000000000063 /* cat_800x480.rgb */ = {isa = PBXFileReference; lastKnownFileType = file; path = cat_800x480.rgb; sourceTree = "<group>"; };
 		020000000000000000000064 /* cat__floyd_steinberg_mono_raw.bin */ = {isa = PBXFileReference; lastKnownFileType = file; path = cat__floyd_steinberg_mono_raw.bin; sourceTree = "<group>"; };
-		020000000000000000000070 /* opendisplay_structs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = opendisplay_structs.swift; sourceTree = "<group>"; };
-		020000000000000000000072 /* opendisplay_protocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = opendisplay_protocol.swift; sourceTree = "<group>"; };
 		020000000000000000000071 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		020000000000000000000073 /* ProtocolOpcodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolOpcodeTests.swift; sourceTree = "<group>"; };
 		020000000000000000000074 /* ColorSchemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorSchemeTests.swift; sourceTree = "<group>"; };
@@ -154,6 +153,7 @@
 				010000000000000000000047 /* JavaScriptCore.framework in Frameworks */,
 				EC7030B92FEF0203009DC919 /* CryptoSwift in Frameworks */,
 				010000000000000000000061 /* EpaperDithering.xcframework in Frameworks */,
+				0D0000000000000000000003 /* ODProtocolKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -195,6 +195,7 @@
 			children = (
 				020000000000000000000003 /* BLEManager.swift */,
 				020000000000000000000045 /* CoreBluetoothTransport.swift */,
+				020000000000000000000080 /* CoreBluetoothLink.swift */,
 				020000000000000000000004 /* ODConstants.swift */,
 				020000000000000000000005 /* ODDevice.swift */,
 			);
@@ -319,8 +320,6 @@
 		030000000000000000000010 /* Generated */ = {
 			isa = PBXGroup;
 			children = (
-				020000000000000000000072 /* opendisplay_protocol.swift */,
-				020000000000000000000070 /* opendisplay_structs.swift */,
 				020000000000000000000071 /* README.md */,
 			);
 			path = Generated;
@@ -343,6 +342,9 @@
 			dependencies = (
 			);
 			name = "OD App";
+			packageProductDependencies = (
+				0D0000000000000000000002 /* ODProtocolKit */,
+			);
 			productName = "OD App";
 			productReference = 020000000000000000000013 /* OD App.app */;
 			productType = "com.apple.product-type.application";
@@ -395,6 +397,7 @@
 			mainGroup = 030000000000000000000001;
 			packageReferences = (
 				EC7030B72FEF0203009DC919 /* XCRemoteSwiftPackageReference "CryptoSwift" */,
+				0D0000000000000000000001 /* XCLocalSwiftPackageReference "Packages/ODProtocolKit" */,
 			);
 			productRefGroup = 030000000000000000000008 /* Products */;
 			projectDirPath = "";
@@ -470,6 +473,7 @@
 				010000000000000000000045 /* CoreBluetoothTransport.swift in Sources */,
 				010000000000000000000004 /* ODConstants.swift in Sources */,
 				010000000000000000000005 /* ODDevice.swift in Sources */,
+				010000000000000000000080 /* CoreBluetoothLink.swift in Sources */,
 				010000000000000000000006 /* ODCommands.swift in Sources */,
 				010000000000000000000046 /* OpenDisplayJSRuntime.swift in Sources */,
 				01000000000000000000004E /* ToolboxConfigRuntime.swift in Sources */,
@@ -480,8 +484,6 @@
 				01000000000000000000000E /* ConfigModel.swift in Sources */,
 				010000000000000000000054 /* AdvancedSettingsView.swift in Sources */,
 				010000000000000000000021 /* ImageProcessor.swift in Sources */,
-				010000000000000000000072 /* opendisplay_protocol.swift in Sources */,
-				010000000000000000000070 /* opendisplay_structs.swift in Sources */,
 				010000000000000000000060 /* RustDither.swift in Sources */,
 				010000000000000000000022 /* ToolboxView.swift in Sources */,
 				010000000000000000000024 /* ODLogoView.swift in Sources */,
@@ -764,6 +766,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		0D0000000000000000000001 /* XCLocalSwiftPackageReference "Packages/ODProtocolKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "Packages/ODProtocolKit";
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		EC7030B72FEF0203009DC919 /* XCRemoteSwiftPackageReference "CryptoSwift" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -780,6 +789,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = EC7030B72FEF0203009DC919 /* XCRemoteSwiftPackageReference "CryptoSwift" */;
 			productName = CryptoSwift;
+		};
+		0D0000000000000000000002 /* ODProtocolKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0D0000000000000000000001 /* XCLocalSwiftPackageReference "Packages/ODProtocolKit" */;
+			productName = ODProtocolKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

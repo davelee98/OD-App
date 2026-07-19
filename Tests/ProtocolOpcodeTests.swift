@@ -1,5 +1,6 @@
 import XCTest
 @testable import OD_App
+import ODProtocolKit
 
 /// Pins the app's hand-ergonomic `OD.Cmd` opcode enum to the canonical wire constants generated
 /// from the `opendisplay-protocol` header (`Generated/opendisplay_protocol.swift`). Swift enum raw

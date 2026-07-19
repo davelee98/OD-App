@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import CoreBluetooth
+import ODProtocolKit
 
 /// Serial queue for live canvas adjustments. Dragging an adjustment slider fires many refreshes;
 /// running them here one at a time (instead of on the global concurrent queue) stops a burst from
@@ -546,7 +547,7 @@ struct ComposerView: View {
                 .font(.caption).foregroundStyle(.orange)
 
             Picker("Color mode", selection: $colorScheme) {
-                ForEach(ColorScheme.appSupported, id: \.rawValue) { scheme in
+                ForEach(ODProtocolKit.ColorScheme.appSupported, id: \.rawValue) { scheme in
                     Text(scheme.displayName).tag(scheme.rawValue)
                 }
             }

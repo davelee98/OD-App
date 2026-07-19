@@ -1,5 +1,6 @@
 import XCTest
 @testable import OD_App
+import ODProtocolKit
 
 /// Guards the MSD-advertisement parse after migrating its fixed 16-byte header onto the generated
 /// `MsdAdvertisement` struct and its status byte onto `MsdStatusBits`, and the config-packet /
