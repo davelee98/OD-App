@@ -131,6 +131,8 @@
 		020000000000000000000062 /* RustDitherParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustDitherParityTests.swift; sourceTree = "<group>"; };
 		020000000000000000000063 /* cat_800x480.rgb */ = {isa = PBXFileReference; lastKnownFileType = file; path = cat_800x480.rgb; sourceTree = "<group>"; };
 		020000000000000000000064 /* cat__floyd_steinberg_mono_raw.bin */ = {isa = PBXFileReference; lastKnownFileType = file; path = cat__floyd_steinberg_mono_raw.bin; sourceTree = "<group>"; };
+		020000000000000000000070 /* opendisplay_structs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = opendisplay_structs.swift; sourceTree = "<group>"; };
+		020000000000000000000071 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -167,6 +169,7 @@
 				020000000000000000000002 /* ContentView.swift */,
 				020000000000000000000012 /* Info.plist */,
 				020000000000000000000030 /* Assets.xcassets */,
+				030000000000000000000010 /* Generated */,
 				030000000000000000000009 /* Resources */,
 				03000000000000000000000A /* Tests */,
 				030000000000000000000002 /* BLE */,
@@ -299,6 +302,15 @@
 				020000000000000000000064 /* cat__floyd_steinberg_mono_raw.bin */,
 			);
 			path = Fixtures;
+			sourceTree = "<group>";
+		};
+		030000000000000000000010 /* Generated */ = {
+			isa = PBXGroup;
+			children = (
+				020000000000000000000070 /* opendisplay_structs.swift */,
+				020000000000000000000071 /* README.md */,
+			);
+			path = Generated;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
