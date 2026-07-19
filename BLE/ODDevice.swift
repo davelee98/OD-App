@@ -2,6 +2,7 @@ import Foundation
 import CoreBluetooth
 import Combine
 import os
+import ODProtocolKit
 
 /// Observable app-facing device. Core Bluetooth owns the radio; `ble-common.js` owns the protocol.
 final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
@@ -53,6 +54,32 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     private let transport: CoreBluetoothTransport
     private let logHandler: (LogEntry) -> Void
     private var runtime: OpenDisplayJSRuntime?
+
+    // Native wire-protocol client (ODProtocolKit). Phase 1: drives the direct-write image upload,
+    // replacing the JS `uploadPacked` path (unless `-ODUseJSUpload` is set). Lazy so it and its link
+    // are only created when first used.
+    // The kit is @MainActor; the BLE stack is main-confined (CoreBluetooth `queue: .main`), so
+    // `assumeIsolated` at these interop points is safe. Lazy so they exist only when first used.
+    private lazy var nativeLink: CoreBluetoothLink =
+        MainActor.assumeIsolated { CoreBluetoothLink(transport: self.transport) }
+    private lazy var protocolClient: ODProtocolClient = MainActor.assumeIsolated {
+        let client = ODProtocolClient(link: self.nativeLink)
+        client.onWireTraffic = { [weak self] direction, data in
+            // Log native SENT frames for BLE-log parity; RECEIVED are already logged in the
+            // transport fan-out below (0x71 chunk floods are suppressed there during a send).
+            guard direction == .sent else { return }
+            self?.appendLog(direction: .sent, data: data, label: nil)
+        }
+        client.onEvent = { [weak self] event in
+            switch event {
+            case .refreshCompleted: self?.trace("panel refresh complete (0x73)")
+            case .refreshTimedOut:  self?.trace("panel refresh timed out (0x74)", level: .error)
+            case .log(let message): self?.trace(message)
+            }
+        }
+        return client
+    }
+    private var uploadTask: Task<Void, Never>?
     private var msdData: Data?
     private var configReadWatchdog: DispatchWorkItem?
     private var configWriteWatchdog: DispatchWorkItem?
@@ -146,6 +173,8 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         connectionState = .disconnected
         isAuthenticated = false
         if uploadPhase == .sending { failUpload("The display disconnected during upload.") }
+        uploadTask?.cancel(); uploadTask = nil
+        MainActor.assumeIsolated { self.nativeLink.linkDropped(nil) }   // fail any pending native upload
         // A disconnect orphans every in-flight operation: cancel all stall watchdogs so none
         // fires seconds later over stale state, drop the chunk-ack handler, and clear the
         // in-flight flags so the next connection starts fresh. (`setConnected(false)` above
@@ -190,6 +219,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             }
             self.configWriteAckHandler?(data)
             self.runtime?.receiveNotification(data)
+            MainActor.assumeIsolated { self.nativeLink.deliver(data) }
         }
         transport.onError = { [weak self] message in
             self?.trace("transport error; changing appState to failed: \(message)", level: .error)
@@ -597,6 +627,33 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             trace("Image-data (0x0071) chunks are hidden during upload; launch with the detailed-payloads flag to show them.")
         }
         let modes = config?.transmissionModes ?? 0
+        armUploadWatchdog()
+
+        // Debug kill-switch: `-ODUseJSUpload` routes back through ble-common.js during native
+        // bring-up. Default is the native ODProtocolKit direct-write path.
+        guard ProcessInfo.processInfo.arguments.contains("-ODUseJSUpload") else {
+            let transmissionModes = TransmissionModes(rawValue: modes)
+            uploadTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.protocolClient.uploadImage(pixelData, modes: transmissionModes,
+                                                              refresh: .full, etag: nil) { [weak self] progress in
+                        guard let self, self.uploadPhase == .sending else { return }
+                        self.uploadProgress = Double(progress.bytesSent) / Double(max(1, progress.bytesTotal))
+                        if self.uploadProgress >= 1 { self.completeUploadEarly() }
+                    }
+                    self.uploadWatchdog?.cancel(); self.uploadWatchdog = nil
+                    // completeUploadEarly usually already flipped to .succeeded at the last data ACK.
+                    if self.uploadPhase == .sending {
+                        self.uploadProgress = 1; self.finishUploadTiming(); self.uploadPhase = .succeeded
+                    }
+                } catch {
+                    self.uploadWatchdog?.cancel(); self.uploadWatchdog = nil
+                    if self.uploadPhase == .sending { self.failUpload(error.localizedDescription) }
+                }
+            }
+            return
+        }
 
         let arguments: [String: Any] = [
             "rawHex": pixelData.hexString.replacingOccurrences(of: " ", with: ""),
@@ -604,7 +661,6 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             "transmissionModes": Int(modes),
             "useFastRefresh": false
         ]
-        armUploadWatchdog()
         call("uploadPacked", arguments: arguments) { [weak self] result in
             guard let self else { return }
             self.uploadWatchdog?.cancel()

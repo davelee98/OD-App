@@ -16,7 +16,7 @@ fi
 
 SRC_REPO="$1"
 SRC_DIR="${SRC_REPO}/src"
-DEST="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/Generated"
+DEST="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/Packages/ODProtocolKit/Sources/ODProtocolKit/Generated"
 
 # Generated Swift files to vendor.
 FILES=(opendisplay_protocol.swift opendisplay_structs.swift)

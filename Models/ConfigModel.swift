@@ -1,4 +1,5 @@
 import Foundation
+import ODProtocolKit
 
 /// Native representation of the same schema-driven configuration used by the web Toolbox.
 ///

@@ -1,4 +1,5 @@
 import Foundation
+import ODProtocolKit
 
 /// Config-dependent locations within the 11-byte dynamic portion of OpenDisplay MSD.
 struct ODAdvertisementLayout: Equatable {

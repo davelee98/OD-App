@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import ODProtocolKit
 
 /// Home screen: the persistent "My Displays" registry that replaces the old live-scanning
 /// two-tool launcher. Tapping a display opens its detail/Composer; the gear opens Advanced.
@@ -141,7 +142,7 @@ private struct DisplayRowLabel: View {
     }
 
     private var colorSchemeName: String {
-        ColorScheme(rawValue: UInt8(clamping: entity.colorScheme))?.displayName
+        ODProtocolKit.ColorScheme(rawValue: UInt8(clamping: entity.colorScheme))?.displayName
             ?? "Scheme \(entity.colorScheme)"
     }
 }
@@ -343,7 +344,7 @@ struct AddDisplaySheet: View {
     }
 
     private func cachedColorSchemeName(for entity: SavedDisplayEntity) -> String {
-        ColorScheme(rawValue: UInt8(clamping: entity.colorScheme))?.displayName
+        ODProtocolKit.ColorScheme(rawValue: UInt8(clamping: entity.colorScheme))?.displayName
             ?? "Scheme \(entity.colorScheme)"
     }
 }

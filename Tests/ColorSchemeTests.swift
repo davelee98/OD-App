@@ -1,5 +1,6 @@
 import XCTest
 @testable import OD_App
+import ODProtocolKit
 
 /// Locks the app's use of the generated `ColorScheme` (from `Generated/opendisplay_structs.swift`)
 /// after retiring the app's hand-rolled enum. Guards the composer's color-mode picker against the

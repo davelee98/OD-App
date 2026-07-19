@@ -1,5 +1,6 @@
 import Foundation
 import CoreBluetooth
+import ODProtocolKit
 
 enum AppInfo {
     /// Marketing version (`CFBundleShortVersionString`, i.e. `MARKETING_VERSION`) read from the app
