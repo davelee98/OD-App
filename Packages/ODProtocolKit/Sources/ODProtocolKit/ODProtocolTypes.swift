@@ -14,6 +14,7 @@ public enum ODProtocolError: Error, Equatable {
     case timeout(operation: String)
     case deviceRejected(opcode: UInt16, code: UInt8?)   // an FF <opcode> [err] notification
     case authRequired                  // 0x..FE
+    case authFailed(String)            // handshake rejected, or device's mutual-auth proof mismatched
     case malformedResponse(String)
     case sizeMismatch(expected: Int, actual: Int)
 }
