@@ -18,8 +18,8 @@ SRC_REPO="$1"
 SRC_DIR="${SRC_REPO}/src"
 DEST="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/Generated"
 
-# Generated Swift files to vendor. Add opendisplay_protocol.swift here once it exists upstream.
-FILES=(opendisplay_structs.swift)
+# Generated Swift files to vendor.
+FILES=(opendisplay_protocol.swift opendisplay_structs.swift)
 
 for f in "${FILES[@]}"; do
   if [ ! -f "${SRC_DIR}/${f}" ]; then

@@ -132,6 +132,7 @@
 		020000000000000000000063 /* cat_800x480.rgb */ = {isa = PBXFileReference; lastKnownFileType = file; path = cat_800x480.rgb; sourceTree = "<group>"; };
 		020000000000000000000064 /* cat__floyd_steinberg_mono_raw.bin */ = {isa = PBXFileReference; lastKnownFileType = file; path = cat__floyd_steinberg_mono_raw.bin; sourceTree = "<group>"; };
 		020000000000000000000070 /* opendisplay_structs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = opendisplay_structs.swift; sourceTree = "<group>"; };
+		020000000000000000000072 /* opendisplay_protocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = opendisplay_protocol.swift; sourceTree = "<group>"; };
 		020000000000000000000071 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -307,6 +308,7 @@
 		030000000000000000000010 /* Generated */ = {
 			isa = PBXGroup;
 			children = (
+				020000000000000000000072 /* opendisplay_protocol.swift */,
 				020000000000000000000070 /* opendisplay_structs.swift */,
 				020000000000000000000071 /* README.md */,
 			);
