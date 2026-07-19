@@ -35,3 +35,24 @@ public struct ODUploadProgress {
 
 /// Direction of a wire packet, for logging parity with the existing BLE log.
 public enum ODWireDirection { case sent, received }
+
+/// Fire-and-forget device controls (no ACK is awaited — the device may reboot/sleep and drop BLE).
+public enum ODSimpleCommand {
+    case reboot                        // 0x0F
+    case enterDFU                      // 0x51
+    case deepSleep(seconds: UInt16?)   // 0x52 [| seconds(u16 BE) wake override]
+    case powerOff                      // 0x53 (protocol 2.1)
+    case raw(opcode: UInt16, payload: [UInt8])
+
+    var frame: Data {
+        switch self {
+        case .reboot:   return ODFrame.command(CMD_REBOOT)
+        case .enterDFU: return ODFrame.command(CMD_ENTER_DFU)
+        case .deepSleep(let seconds):
+            let payload = (seconds ?? 0) > 0 ? ODByteOrder.u16BE(seconds!) : []
+            return ODFrame.command(CMD_DEEP_SLEEP, payload: payload)
+        case .powerOff: return ODFrame.command(CMD_POWER_OFF)
+        case .raw(let opcode, let payload): return ODFrame.command(opcode, payload: payload)
+        }
+    }
+}
