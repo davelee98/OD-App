@@ -81,8 +81,8 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
     private var uploadTask: Task<Void, Never>?
 
-    /// Native ODProtocolKit paths are used unless `-ODUseJSUpload` forces the legacy ble-common.js
-    /// route (bring-up safety). Config read/write still use JS until their dedicated migration.
+    /// Native ODProtocolKit paths (upload, config read/write, firmware/MSD, commands) are used unless
+    /// `-ODUseJSUpload` forces the legacy ble-common.js route (bring-up safety net).
     private var useNativeProtocol: Bool { !ProcessInfo.processInfo.arguments.contains("-ODUseJSUpload") }
     private var msdData: Data?
     private var configReadWatchdog: DispatchWorkItem?
@@ -411,6 +411,31 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             waiters.forEach { $0(result) }
         }
         configReadFinish = finish
+        if useNativeProtocol {
+            // Native transport only: the raw blob still goes to ODConfig.parse (toolbox engine).
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    let bytes = try await self.protocolClient.readConfigBlob { progress in
+                        self.configReadProgress = progress
+                    }
+                    guard !didComplete else { return }
+                    let model = try ODConfig.parse(bytes)
+                    self.config = model
+                    self.configReadProgress = 1
+                    self.trace("readConfig (native) decoded \(model.toolbox.packets.count) packets; " +
+                               "display=\(model.displayWidth)x\(model.displayHeight) colorScheme=\(model.colorScheme)")
+                    self.reparseAdvertisement()
+                    finish(.success(model))
+                } catch {
+                    guard !didComplete else { return }
+                    self.lastError = "Configuration read failed: \(error.localizedDescription)"
+                    self.configReadProgress = 0
+                    finish(.failure(error))
+                }
+            }
+            return
+        }
         armConfigReadWatchdog()
         call("readConfig") { [weak self] result in
             guard let self else { return }
@@ -523,6 +548,24 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 self?.configReadFinish?(.success(model))
             }
             completion?(succeeded)
+        }
+
+        if useNativeProtocol {
+            // Native chunked write (0x41/0x42 with per-chunk ACK); the client owns the timeout, so
+            // the ACK-counter workaround + watchdog below are skipped.
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.protocolClient.writeConfigBlob(data)
+                    self.config = model
+                    finish(true)
+                } catch {
+                    self.lastError = error.localizedDescription
+                    self.trace("writeConfig (native) failed: \(error.localizedDescription)", level: .error)
+                    finish(false)
+                }
+            }
+            return
         }
 
         // `ble-common.js` only completes a config write when it sees a distinct 0x00/0xCE
