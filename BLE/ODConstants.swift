@@ -24,6 +24,10 @@ enum OD {
     /// from `bleChunkSize`, which governs image-data transport chunks.
     static let configWriteChunkSize = 200
 
+    /// Wire command opcodes. Raw values mirror the canonical `CMD_*` constants in the vendored
+    /// `Generated/opendisplay_protocol.swift` (Swift enum raw values must be literals, so they can't
+    /// reference the `let`s directly) — `ProtocolOpcodeTests` pins every case to its generated
+    /// constant so this can't silently drift from the protocol source of truth again.
     enum Cmd: UInt16 {
         case reboot            = 0x000F
         case readConfig        = 0x0040
@@ -41,7 +45,7 @@ enum OD {
         case ledStop           = 0x0075
         case partialUpdate     = 0x0076
         case buzzer            = 0x0077
-        case nfc               = 0x0082
+        case nfc               = 0x0083  // CMD_NFC_ENDPOINT; was 0x0082 (now CMD_PIPE_WRITE_END) — stale pre-v2.0
 
         var header: Data {
             Data([UInt8(rawValue >> 8), UInt8(rawValue & 0xFF)])
@@ -65,7 +69,7 @@ enum OD {
             case .ledStop:          return "LED Stop (0x0075)"
             case .partialUpdate:    return "Partial Update (0x0076)"
             case .buzzer:           return "Buzzer (0x0077)"
-            case .nfc:              return "NFC (0x0082)"
+            case .nfc:              return "NFC (0x0083)"
             }
         }
     }
