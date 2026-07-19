@@ -44,16 +44,27 @@ was its only collision). Notes:
 - The dead `bitsPerPixel` (dead-code review §8) was dropped, not ported.
 - `ColorSchemeTests` pins `appSupported`, the display names, and raw-value reconstruction.
 
-### Remaining struct rewires (now unblocked)
-With `opendisplay_structs.swift` compiled in, these hand-maintained forms can be migrated next:
+### ✅ Struct / enum rewires (step 3)
+With `opendisplay_structs.swift` compiled in, the constants that have a **native Swift consumer** were
+migrated onto the generated types (all zero behavior change, guarded by `AdvertisementDataTests`):
 
-- `OD_CONFIG_VERSION` / `OD_CONFIG_MINOR_VERSION` / `OD_CONFIG_CRC_POLY` / `OD_CONFIG_CRC_INIT` —
-  note `ToolboxData.minorVersion` is the **config.yaml schema** version, a *different* concept from
-  the wire `OD_CONFIG_MINOR_VERSION`; verify before wiring (they may legitimately differ).
-- `ManufacturerData` / `MsdAdvertisement` structs → retire the hand-parse in
-  `AdvertisementData.swift`.
-- `ICType` / `Rotation` / `TransmissionModes` / `PowerMode` / enums consumed by `ConfigModel` /
-  `ToolboxData`.
+- **`AdvertisementData.swift`** — the fixed 16-byte MSD header now decodes via `MsdAdvertisement(bytes:)`;
+  the status byte via `MsdStatusBits` (`.batteryVoltageBit8` / `.rebootFlag` / `.connectionRequested` /
+  `mainLoopCounterShift`/`Mask`); and the config-overlay magic numbers via `ConfigPacketType`
+  (`.sensor`/`.binaryInput`/`.touch`), `SensorType` (`.sht40`/`.bq27220`), and `TouchIcType` (`.gt911`).
+- **`ConfigModel.swift`** — the packet-type accessors (`value`/`integer`/`set`) now take a
+  `ConfigPacketType` (`.display` = 32, `.power` = 4, `.security` = 39) instead of magic integers.
+
+### Nothing to migrate (no native Swift consumer)
+- **Config structs** (`SystemConfig`, `DisplayConfig`, `WifiConfig`, …): the app never (de)serializes
+  config natively — `ODConfigModel` reads JS-decoded `ToolboxPacket` **string fields**, so there is no
+  Swift struct-parse to replace.
+- **`OD_CONFIG_CRC_POLY` / `OD_CONFIG_CRC_INIT`**: the config CRC is computed in the JS layer, not Swift.
+- **`OD_CONFIG_VERSION` / `OD_CONFIG_MINOR_VERSION`**: `ToolboxData.version`/`.minorVersion` is the
+  **config.yaml schema** version (a different concept) and is authored on the website — not the wire
+  `OD_CONFIG_*`.
+- **`TransmissionModes`** (the OptionSet): the app forwards the raw `transmission_modes` byte to the JS
+  layer and does no Swift bit-checking, so there is no `.contains(...)` site to rewire.
 
 ## 🗑️ Deleted, not rewired — dead + stale ✅
 The NFC command builders (`ODCommands.nfcWriteSingle/Start/Chunk/End`, `ODDevice.writeNFC`,

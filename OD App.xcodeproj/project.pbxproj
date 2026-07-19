@@ -65,6 +65,7 @@
 		010000000000000000000070 /* opendisplay_structs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000070 /* opendisplay_structs.swift */; };
 		010000000000000000000073 /* ProtocolOpcodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000073 /* ProtocolOpcodeTests.swift */; };
 		010000000000000000000074 /* ColorSchemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000074 /* ColorSchemeTests.swift */; };
+		010000000000000000000075 /* AdvertisementDataTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000075 /* AdvertisementDataTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -140,6 +141,7 @@
 		020000000000000000000071 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		020000000000000000000073 /* ProtocolOpcodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolOpcodeTests.swift; sourceTree = "<group>"; };
 		020000000000000000000074 /* ColorSchemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorSchemeTests.swift; sourceTree = "<group>"; };
+		020000000000000000000075 /* AdvertisementDataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvertisementDataTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -299,6 +301,7 @@
 				020000000000000000000062 /* RustDitherParityTests.swift */,
 				020000000000000000000073 /* ProtocolOpcodeTests.swift */,
 				020000000000000000000074 /* ColorSchemeTests.swift */,
+				020000000000000000000075 /* AdvertisementDataTests.swift */,
 				03000000000000000000000B /* Fixtures */,
 			);
 			path = Tests;
@@ -503,6 +506,7 @@
 				010000000000000000000062 /* RustDitherParityTests.swift in Sources */,
 				010000000000000000000073 /* ProtocolOpcodeTests.swift in Sources */,
 				010000000000000000000074 /* ColorSchemeTests.swift in Sources */,
+				010000000000000000000075 /* AdvertisementDataTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
