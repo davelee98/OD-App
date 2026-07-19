@@ -80,6 +80,10 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         return client
     }
     private var uploadTask: Task<Void, Never>?
+
+    /// Native ODProtocolKit paths are used unless `-ODUseJSUpload` forces the legacy ble-common.js
+    /// route (bring-up safety). Config read/write still use JS until their dedicated migration.
+    private var useNativeProtocol: Bool { !ProcessInfo.processInfo.arguments.contains("-ODUseJSUpload") }
     private var msdData: Data?
     private var configReadWatchdog: DispatchWorkItem?
     private var configWriteWatchdog: DispatchWorkItem?
@@ -286,6 +290,17 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     func readFirmware() {
+        if useNativeProtocol {
+            firmwareWatchdog?.cancel(); firmwareWatchdog = nil   // native client owns the timeout
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    let (major, minor, _) = try await self.protocolClient.firmwareVersion()
+                    self.firmwareVersion = "\(major).\(minor)"
+                } catch { self.lastError = error.localizedDescription }
+            }
+            return
+        }
         trace("readFirmware dispatching to runtime.call")
         var didComplete = false
         firmwareWatchdog?.cancel()
@@ -315,6 +330,20 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     func readMSD() {
         isReadingAdvertisement = true
         advertisementError = nil
+        if useNativeProtocol {
+            msdWatchdog?.cancel(); msdWatchdog = nil
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    let msd = try await self.protocolClient.readMSD()
+                    self.publishAdvertisement(msd)
+                } catch {
+                    self.advertisementError = error.localizedDescription
+                    self.isReadingAdvertisement = false
+                }
+            }
+            return
+        }
         var didComplete = false
         msdWatchdog?.cancel()
         msdWatchdog = makeWatchdog(operation: "readMSD") { [weak self] in
@@ -553,9 +582,18 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
-    func reboot() { callIgnoringResult("reboot") }
-    func enterDFU() { callIgnoringResult("bootloader") }
-    func sendDeepSleep() { sendRaw(ODCommands.deepSleep(), label: "Deep Sleep") }
+    func reboot() {
+        if useNativeProtocol { Task { @MainActor [weak self] in try? await self?.protocolClient.send(.reboot) }; return }
+        callIgnoringResult("reboot")
+    }
+    func enterDFU() {
+        if useNativeProtocol { Task { @MainActor [weak self] in try? await self?.protocolClient.send(.enterDFU) }; return }
+        callIgnoringResult("bootloader")
+    }
+    func sendDeepSleep() {
+        if useNativeProtocol { Task { @MainActor [weak self] in try? await self?.protocolClient.send(.deepSleep(seconds: nil)) }; return }
+        sendRaw(ODCommands.deepSleep(), label: "Deep Sleep")
+    }
 
     // MARK: - Authentication
 
