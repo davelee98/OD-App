@@ -35,12 +35,22 @@ final class ODNotificationRouter {
     /// Frames not consumed by the active consumer (refresh completion, generic acks).
     var onUnmatched: ((ODFrame.Notification) -> Void)?
 
+    /// When set (only during a PIPE transfer), every classified frame is offered here FIRST, ahead of
+    /// the waiter/collector. PIPE is a concurrent send/receive loop — SACKs arrive mid-burst with no
+    /// waiter armed — so the uploader owns the inbound stream for its duration and buffers frames
+    /// itself. The sink forwards frames it doesn't want (e.g. refresh 0x73/0x74) back to `onUnmatched`.
+    var frameSink: ((ODFrame.Notification) -> Void)?
+
     /// Opcode currently in flight, for `ODFrame.classify` byte-order + 0x73-collision disambiguation.
     var expectedOpcode: UInt8?
 
     /// Feed a raw notification (from `ODLink.onNotification`).
     func receive(_ data: Data) {
         guard let note = ODFrame.classify([UInt8](data), expectedOpcode: expectedOpcode) else { return }
+        if let sink = frameSink {
+            sink(note)
+            return
+        }
         if var c = collector {
             // Re-arm the stall timeout on every chunk, then step.
             c.timeout.cancel()
