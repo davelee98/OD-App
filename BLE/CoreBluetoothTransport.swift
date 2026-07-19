@@ -41,7 +41,7 @@ final class CoreBluetoothTransport {
         }
         let maximum = peripheral.maximumWriteValueLength(for: .withoutResponse)
         if !writes.isEmpty, !peripheral.canSendWriteWithoutResponse {
-            trace("drainWrites: \(writes.count) write(s) queued but canSendWriteWithoutResponse=false; waiting for peripheralIsReady callback")
+            traceVerbose("drainWrites: \(writes.count) write(s) queued but canSendWriteWithoutResponse=false; waiting for peripheralIsReady callback")
         }
 
         while !writes.isEmpty, peripheral.canSendWriteWithoutResponse {
@@ -136,12 +136,12 @@ final class CoreBluetoothTransport {
             return
         }
         guard let data = characteristic.value, !data.isEmpty else { return }
-        trace("didUpdateValue: received \(data.count) bytes")
+        traceVerbose("didUpdateValue: received \(data.count) bytes")   // per-notification; the packet itself is logged in ODDevice
         onNotification?(data)
     }
 
     func isReadyToSendWriteWithoutResponse() {
-        trace("peripheralIsReady(toSendWriteWithoutResponse:) fired; draining \(writes.count) queued write(s)")
+        traceVerbose("peripheralIsReady(toSendWriteWithoutResponse:) fired; draining \(writes.count) queued write(s)")
         drainWrites()
     }
 
@@ -154,8 +154,9 @@ final class CoreBluetoothTransport {
         onTrace?(message)
     }
 
-    /// High-frequency, per-write traces. Silent in normal use so image uploads (hundreds of
-    /// writes) don't flood the log; enable with the `BLELogging.detailedPayloads` debug launch flag.
+    /// High-frequency per-write / per-notification / write-flow-control traces. Silent in normal use
+    /// so image uploads (hundreds of writes + acks, plus write-without-response draining) don't flood
+    /// the log; enable with the `BLELogging.detailedPayloads` debug launch flag.
     private func traceVerbose(_ message: String) {
         guard BLELogging.detailedPayloads else { return }
         onTrace?(message)
