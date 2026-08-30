@@ -53,6 +53,16 @@ final class SavedDisplayEntity {
     /// Defaults to false so a lightweight SwiftData migration of existing stores treats their
     /// values as unconfirmed until the next successful read.
     var resolutionConfirmed: Bool = false
+    /// True when this display refuses unauthenticated traffic.
+    ///
+    /// The **key itself is never stored here** — it lives in the Keychain under
+    /// `com.opendisplay.psk` keyed by this `id`. This flag only lets the UI know a display is locked
+    /// before (or independently of) connecting, which is what makes recovery possible after a
+    /// restore that left the entity behind but not the Keychain item.
+    ///
+    /// Defaults to false, like `resolutionConfirmed`, so existing stores migrate lightweight and
+    /// self-correct on the next connect.
+    var requiresAuthentication: Bool = false
 
     init(id: String,
          friendlyName: String,
@@ -61,6 +71,7 @@ final class SavedDisplayEntity {
          height: Int = 480,
          colorScheme: Int = 0,
          resolutionConfirmed: Bool = false,
+         requiresAuthentication: Bool = false,
          lastSeen: Date = .now,
          dateAdded: Date = .now) {
         self.id = id
@@ -70,6 +81,7 @@ final class SavedDisplayEntity {
         self.height = height
         self.colorScheme = colorScheme
         self.resolutionConfirmed = resolutionConfirmed
+        self.requiresAuthentication = requiresAuthentication
         self.lastSeen = lastSeen
         self.dateAdded = dateAdded
     }
@@ -106,5 +118,14 @@ extension SavedDisplayEntity {
         colorScheme = Int(config.colorScheme)
         resolutionConfirmed = true
         lastSeen = .now
+    }
+
+    /// Mirror the live device's lock state onto the registry entry, so a display that is locked (or
+    /// unlocked) later self-heals. Kept separate from `apply(config:)`, which takes a config rather
+    /// than a lock state.
+    func noteLockState(from device: ODDevice) {
+        if requiresAuthentication != device.requiresAuthentication {
+            requiresAuthentication = device.requiresAuthentication
+        }
     }
 }

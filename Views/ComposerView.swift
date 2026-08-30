@@ -106,6 +106,7 @@ struct ComposerView: View {
     // Preview.
     @State private var previewImage: UIImage?
     @State private var showPreview = false
+    @State private var showUnlockSheet = false
 
     // Send overlay imagery: the full-color composite shows immediately, then the dithered panel
     // preview is revealed left→right in lockstep with upload progress.
@@ -206,6 +207,9 @@ struct ComposerView: View {
             }
         }
         .sheet(isPresented: $showPreview) { previewSheet }
+        .modifier(UnlockPrompt(isPresented: $showUnlockSheet,
+                               configReadState: device?.configReadState,
+                               sheet: { unlockSheet }))
         .confirmationDialog("Reset the page?", isPresented: $showResetConfirm, titleVisibility: .visible) {
             Button("Reset Page", role: .destructive) { resetPage() }
             Button("Cancel", role: .cancel) {}
@@ -810,6 +814,35 @@ struct ComposerView: View {
         }
     }
 
+    /// Key entry for a locked display we have no usable key for. Reached when a config read comes
+    /// back `.authRequired` — the Keychain item is missing even though the entity says it's locked.
+    @ViewBuilder
+    private var unlockSheet: some View {
+        NavigationStack {
+            Form {
+                if let device {
+                    Section {
+                        DisplayKeyEntryView(device: device) { showUnlockSheet = false }
+                    } footer: {
+                        Text("\(entity.friendlyName) is password protected. Enter its 32-character "
+                             + "key to load the configuration. The key is stored in the iOS Keychain.")
+                    }
+                } else {
+                    Text("Reconnect to the display to unlock it.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Unlock Display")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showUnlockSheet = false }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
     private var previewSheet: some View {
         NavigationStack {
             VStack {
@@ -854,7 +887,7 @@ struct ComposerView: View {
 
         isWaitingForConnection = true
         hasPhysicalConnection = false
-        ble.reconnect(to: identifier)
+        ble.reconnect(to: identifier, requiresAuthentication: entity.requiresAuthentication)
         connectionTimeoutTask?.cancel()
         connectionTimeoutTask = Task {
             try? await Task.sleep(for: .seconds(15))
@@ -879,6 +912,9 @@ struct ComposerView: View {
             connectionTimeoutTask?.cancel()
             isWaitingForConnection = false
             hasPhysicalConnection = true
+            // Promote-only: the hint was already applied in BLEManager.didConnect, so never clear a
+            // lock state the device itself has since taught us.
+            if let device { entity.noteLockState(from: device) }
             syncFromDevice()
         case .failed:
             connectionFailed(device?.lastError ?? "The display connection failed.")
@@ -1440,4 +1476,24 @@ struct UploadStatusOverlay: View {
     UploadStatusOverlay(phase: .failed("Image upload timed out. The display stopped responding."),
                         progress: 0.62, status: nil, deviceName: "Desk EPD",
                         elapsed: 12.0, byteCount: 46280, onDismiss: {}, onRetry: {})
+}
+
+/// Presents key entry when a config read comes back `.authRequired`.
+///
+/// Extracted from `ComposerView.body` rather than applied inline: that chain is long enough that
+/// two more modifiers pushed it past the type-checker's budget ("unable to type-check this
+/// expression in reasonable time"). Bundling them into one modifier keeps the body one node longer
+/// instead of three.
+private struct UnlockPrompt<Sheet: View>: ViewModifier {
+    @Binding var isPresented: Bool
+    let configReadState: ODDevice.ConfigReadState?
+    @ViewBuilder let sheet: () -> Sheet
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: $isPresented) { sheet() }
+            .onChange(of: configReadState) { _, state in
+                if state == .authRequired { isPresented = true }
+            }
+    }
 }

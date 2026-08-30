@@ -22,6 +22,7 @@
 		010000000000000000000010 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000010 /* CoreBluetooth.framework */; };
 		010000000000000000000011 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000011 /* Security.framework */; };
 		010000000000000000000021 /* ImageProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000021 /* ImageProcessor.swift */; };
+		0100000000000000000000C1 /* DisplayKeyEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000C1 /* DisplayKeyEntryView.swift */; };
 		010000000000000000000022 /* ToolboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000022 /* ToolboxView.swift */; };
 		010000000000000000000024 /* ODLogoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000024 /* ODLogoView.swift */; };
 		010000000000000000000025 /* ToolboxData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000025 /* ToolboxData.swift */; };
@@ -49,6 +50,7 @@
 		010000000000000000000054 /* AdvancedSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000054 /* AdvancedSettingsView.swift */; };
 		010000000000000000000055 /* ODLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000055 /* ODLog.swift */; };
 		0100000000000000000000A0 /* ToneCompressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000A0 /* ToneCompressionTests.swift */; };
+		0100000000000000000000C2 /* EncryptedSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000C2 /* EncryptedSetupTests.swift */; };
 		0100000000000000000000A1 /* ODDeviceAdmissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000A1 /* ODDeviceAdmissionTests.swift */; };
 		0100000000000000000000A2 /* StringByteLimit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000A2 /* StringByteLimit.swift */; };
 		0100000000000000000000A3 /* StringByteLimitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000A3 /* StringByteLimitTests.swift */; };
@@ -96,6 +98,7 @@
 		020000000000000000000012 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		020000000000000000000013 /* OD App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "OD App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		020000000000000000000021 /* ImageProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageProcessor.swift; sourceTree = "<group>"; };
+		0200000000000000000000C1 /* DisplayKeyEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayKeyEntryView.swift; sourceTree = "<group>"; };
 		020000000000000000000022 /* ToolboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolboxView.swift; sourceTree = "<group>"; };
 		020000000000000000000024 /* ODLogoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODLogoView.swift; sourceTree = "<group>"; };
 		020000000000000000000025 /* ToolboxData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolboxData.swift; sourceTree = "<group>"; };
@@ -124,6 +127,7 @@
 		020000000000000000000054 /* AdvancedSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedSettingsView.swift; sourceTree = "<group>"; };
 		020000000000000000000055 /* ODLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODLog.swift; sourceTree = "<group>"; };
 		0200000000000000000000A0 /* ToneCompressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToneCompressionTests.swift; sourceTree = "<group>"; };
+		0200000000000000000000C2 /* EncryptedSetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptedSetupTests.swift; sourceTree = "<group>"; };
 		0200000000000000000000A1 /* ODDeviceAdmissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODDeviceAdmissionTests.swift; sourceTree = "<group>"; };
 		0200000000000000000000A2 /* StringByteLimit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StringByteLimit.swift; sourceTree = "<group>"; };
 		0200000000000000000000A3 /* StringByteLimitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StringByteLimitTests.swift; sourceTree = "<group>"; };
@@ -222,6 +226,7 @@
 				020000000000000000000042 /* ComposerView.swift */,
 				020000000000000000000041 /* DisplayCanvasView.swift */,
 				02000000000000000000000C /* BLETesterView.swift */,
+				0200000000000000000000C1 /* DisplayKeyEntryView.swift */,
 				020000000000000000000022 /* ToolboxView.swift */,
 				020000000000000000000024 /* ODLogoView.swift */,
 				020000000000000000000053 /* SplashView.swift */,
@@ -296,6 +301,7 @@
 				020000000000000000000050 /* ToolboxConfigTests.swift */,
 				0200000000000000000000A3 /* StringByteLimitTests.swift */,
 				0200000000000000000000A0 /* ToneCompressionTests.swift */,
+				0200000000000000000000C2 /* EncryptedSetupTests.swift */,
 				0200000000000000000000A1 /* ODDeviceAdmissionTests.swift */,
 				0200000000000000000000A4 /* BLEChunkSizeTests.swift */,
 				0200000000000000000000B1 /* CanvasCoordinateTests.swift */,
@@ -485,6 +491,7 @@
 				010000000000000000000054 /* AdvancedSettingsView.swift in Sources */,
 				010000000000000000000021 /* ImageProcessor.swift in Sources */,
 				010000000000000000000060 /* RustDither.swift in Sources */,
+				0100000000000000000000C1 /* DisplayKeyEntryView.swift in Sources */,
 				010000000000000000000022 /* ToolboxView.swift in Sources */,
 				010000000000000000000024 /* ODLogoView.swift in Sources */,
 				010000000000000000000053 /* SplashView.swift in Sources */,
@@ -502,6 +509,7 @@
 				010000000000000000000050 /* ToolboxConfigTests.swift in Sources */,
 				0100000000000000000000A3 /* StringByteLimitTests.swift in Sources */,
 				0100000000000000000000A0 /* ToneCompressionTests.swift in Sources */,
+				0100000000000000000000C2 /* EncryptedSetupTests.swift in Sources */,
 				0100000000000000000000A1 /* ODDeviceAdmissionTests.swift in Sources */,
 				0100000000000000000000A4 /* BLEChunkSizeTests.swift in Sources */,
 				0100000000000000000000B1 /* CanvasCoordinateTests.swift in Sources */,

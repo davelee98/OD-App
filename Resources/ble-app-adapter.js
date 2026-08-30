@@ -140,11 +140,19 @@
           });
           break;
         case 'readConfig':
+          // `readToken` correlates progress events with the specific native read that started
+          // them. The event is otherwise anonymous, so a queued event from a superseded read would
+          // move the *current* read's progress and re-arm its stall watchdog. Swift passes the
+          // token in and ignores any event whose token isn't the live one.
           promise = ble.readConfig(function (value, error) {
             if (error) fail(id, error);
             else finish(id, { hex: global.__odBytesToHex(new Uint8Array(value)) });
           }, function (received, total) {
-            emit('configProgress', { received: received, total: total });
+            emit('configProgress', {
+              received: received,
+              total: total,
+              readToken: args.readToken === undefined ? null : args.readToken
+            });
           });
           break;
         case 'writeConfig':

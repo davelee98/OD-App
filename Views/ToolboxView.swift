@@ -261,7 +261,23 @@ struct ToolboxView: View {
                     case .authenticated:
                         Label("Authenticated", systemImage: "checkmark.shield.fill").foregroundStyle(.green)
                     case .canAuthenticate(let key):
-                        Button("Authenticate") { device.authenticate(psk: key) }
+                        // Through `unlock`, so a stored-but-now-wrong key is forgotten rather than
+                        // retried on every connect (which would walk into the device's rate limiter).
+                        Button("Authenticate") {
+                            device.unlock(psk: key) { result in
+                                if case .failure(let error) = result {
+                                    addLog(error.localizedDescription, type: .error)
+                                }
+                            }
+                        }
+                        .disabled(device.isBusyWithHandshake)
+                    case .needsKey:
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Password protected", systemImage: "lock.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                            DisplayKeyEntryView(device: device)
+                        }
                     }
                 }
                 Button(role: .destructive) { ble.disconnect() } label: {
@@ -500,10 +516,18 @@ struct ToolboxView: View {
                     if let device, encryptionKey.count == 32, !device.isAuthenticated {
                         Button("Authenticate with This Key") {
                             if let key = Data(hexString: encryptionKey) {
-                                device.psk = key
-                                device.authenticate(psk: key)
+                                // Via `unlock`, so the key reaches the Keychain only after the
+                                // handshake proves it. Assigning `device.psk` first stored whatever
+                                // the user typed, wrong keys included.
+                                device.unlock(psk: key) { result in
+                                    switch result {
+                                    case .success: addLog("Authenticated", type: .success)
+                                    case .failure(let error): addLog(error.localizedDescription, type: .error)
+                                    }
+                                }
                             }
                         }
+                        .disabled(device.isBusyWithHandshake)
                     }
                 }
             }
@@ -893,12 +917,16 @@ struct ToolboxView: View {
 
     private enum AuthenticationRowState {
         case authenticated
-        case canAuthenticate(Data)
+        case canAuthenticate(Data)   // a key is on file — one tap
+        case needsKey                // known locked, nothing usable stored — ask for it
     }
 
     private func authenticationRowState(for device: ODDevice) -> AuthenticationRowState? {
         if device.isAuthenticated { return .authenticated }
         if let key = device.psk { return .canAuthenticate(key) }
+        // Without this, a display we know is locked but have never held a key for rendered no auth
+        // affordance whatsoever — the reason a first-time locked display was a dead end here.
+        if device.requiresAuthentication { return .needsKey }
         return nil
     }
 

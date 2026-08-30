@@ -201,7 +201,9 @@ struct AddDisplaySheet: View {
         .onAppear {
             if let entity, ble.connectedDevice?.deviceID != entity.id,
                let identifier = UUID(uuidString: entity.id) {
-                ble.reconnect(to: identifier)
+                // Pass the saved lock state so the device authenticates before its first config
+                // read rather than spending a round-trip learning it is locked.
+                ble.reconnect(to: identifier, requiresAuthentication: entity.requiresAuthentication)
             } else if !isEditing {
                 ble.activate()
                 if ble.bluetoothState == .poweredOn { ble.startScan() }
@@ -239,6 +241,19 @@ struct AddDisplaySheet: View {
                             .font(.subheadline.weight(.semibold))
                         configStatus(for: device)
                     }
+                }
+            }
+            // Placed before Name/Location because it's blocking: without the key there is no config,
+            // and without a config a new display can't be saved at all.
+            if let device, device.configReadState == .authRequired || device.requiresAuthentication,
+               !device.isAuthenticated {
+                Section {
+                    DisplayKeyEntryView(device: device)
+                } header: {
+                    Label("Encryption Key", systemImage: "lock.fill")
+                } footer: {
+                    Text("This display was set up with a 32-character key. Enter it to read the "
+                         + "configuration and add the display. The key is stored in the iOS Keychain.")
                 }
             }
             Section("Name") { TextField("e.g. Kitchen Display", text: $friendlyName) }
@@ -280,7 +295,13 @@ struct AddDisplaySheet: View {
                     .font(.caption).foregroundStyle(.secondary)
                 if state == .reading { ProgressView().controlSize(.mini) }
             }
-        } else if case .failed = state {
+        } else if state == .authRequired {
+            // Deliberately no Retry here: the read didn't fail transiently, it was refused. Retrying
+            // unauthenticated just repeats the refusal, which is exactly the dead end this fixes.
+            // The key section below the status row is the remedy.
+            Label("Password protected — enter the key below", systemImage: "lock.fill")
+                .font(.caption).foregroundStyle(.orange)
+        } else if case .failed(let message) = state {
             VStack(alignment: .leading, spacing: 4) {
                 if let entity {
                     Text("\(entity.width)×\(entity.height) · \(cachedColorSchemeName(for: entity))")
@@ -288,11 +309,14 @@ struct AddDisplaySheet: View {
                     Text("Couldn't refresh the configuration.")
                         .font(.caption2).foregroundStyle(.orange)
                 } else {
-                    Text("Couldn't read the display configuration.")
+                    // Show what actually went wrong — these read as real sentences now that
+                    // ODProtocolError carries a LocalizedError description.
+                    Text(message)
                         .font(.caption).foregroundStyle(.orange)
                 }
                 Button("Retry") { device?.readConfig() }
                     .font(.caption).buttonStyle(.borderless)
+                    .disabled(device?.isBusyWithHandshake == true)
             }
         } else if let entity {
             // Stale cached value shown while a fresh read runs (edit mode).
@@ -316,6 +340,7 @@ struct AddDisplaySheet: View {
             entity.friendlyName = trimmedName
             entity.deviceLocation = deviceLocation.trimmingCharacters(in: .whitespacesAndNewlines)
             if let config = device?.config { entity.apply(config: config) }
+            if let device { entity.noteLockState(from: device) }
             saved = true
             dismiss()
             return
@@ -332,11 +357,13 @@ struct AddDisplaySheet: View {
             existing.friendlyName = trimmedName
             existing.deviceLocation = deviceLocation.trimmingCharacters(in: .whitespacesAndNewlines)
             existing.apply(config: config)   // overwrite dimensions only with the freshly-read config
+            existing.noteLockState(from: device)
         } else {
             let entity = SavedDisplayEntity(
                 id: id, friendlyName: trimmedName,
                 deviceLocation: deviceLocation.trimmingCharacters(in: .whitespacesAndNewlines))
             entity.apply(config: config)
+            entity.noteLockState(from: device)
             modelContext.insert(entity)
         }
         saved = true

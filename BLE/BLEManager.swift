@@ -128,9 +128,16 @@ final class BLEManager: NSObject, ObservableObject {
 
     // MARK: - Connection
 
-    func connect(_ discovered: DiscoveredDevice) {
+    /// Lock state known from a saved display, keyed by peripheral UUID so one entity's hint can
+    /// never leak into a different connection. Applied to the `ODDevice` in `didConnect`, before
+    /// GATT discovery reaches `transport.onReady` and starts the handshake — seeding it any later
+    /// (e.g. from a view's `.connected` observer) races the device learning its own state.
+    private var pendingLockHints: [UUID: Bool] = [:]
+
+    func connect(_ discovered: DiscoveredDevice, requiresAuthentication: Bool = false) {
         connectionError = nil
         stopScan()
+        if requiresAuthentication { pendingLockHints[discovered.peripheral.identifier] = true }
         if let idx = discoveredDevices.firstIndex(where: { $0.id == discovered.id }) {
             discoveredDevices[idx].connectionState = .connecting
         }
@@ -151,16 +158,22 @@ final class BLEManager: NSObject, ObservableObject {
 
     /// Reconnect to a previously-saved display by its peripheral identifier — no user scan needed
     /// when iOS still knows the peripheral. Falls back to a scan if it doesn't.
-    func reconnect(to identifier: UUID) {
+    /// - Parameter requiresAuthentication: the saved entity's lock state, so the device can
+    ///   authenticate before its first config read rather than spending a round-trip discovering
+    ///   `00 40 FE`. Callers already hold the entity, and `entity.id` *is* the peripheral UUID, so
+    ///   no lookup is needed here.
+    func reconnect(to identifier: UUID, requiresAuthentication: Bool = false) {
         trace("reconnect requested id=\(identifier.uuidString); current=\(connectedDevice?.deviceID ?? "nil") appState=\(String(describing: connectedDevice?.connectionState)) peripheralState=\(connectedDevice?.peripheral.state.rawValue ?? -1)", level: .info)
         activate()
         connectionError = nil
+        if requiresAuthentication { pendingLockHints[identifier] = true }
         pendingReconnectID = identifier
         attemptPendingReconnect()
     }
 
     /// Stops an in-flight reconnect without disturbing a different, healthy connection.
     func cancelReconnect(to identifier: UUID) {
+        pendingLockHints.removeValue(forKey: identifier)
         if pendingReconnectID == identifier {
             pendingReconnectID = nil
             stopScan()
@@ -287,6 +300,12 @@ extension BLEManager: CBCentralManagerDelegate {
             )
             deviceMap[peripheral.identifier] = device
         }
+        // Apply the saved lock hint before `discoverServices()` below leads to `transport.onReady`,
+        // which is what starts the handshake. Promote-only: never clear a lock state the device
+        // itself just taught us (e.g. a handshake that reported "encryption not configured").
+        if pendingLockHints.removeValue(forKey: peripheral.identifier) == true {
+            device.requiresAuthentication = true
+        }
         device.connectionState = .connecting
         connectedDevice = device
         reconnectingPeripheral = nil
@@ -315,6 +334,7 @@ extension BLEManager: CBCentralManagerDelegate {
         trace("didFailToConnect id=\(peripheral.identifier.uuidString); state=\(peripheral.state.rawValue); error=\(error?.localizedDescription ?? "unknown error")", level: .error)
         connectionError = error?.localizedDescription ?? "The display could not be reached."
         reconnectingPeripheral = nil
+        pendingLockHints.removeValue(forKey: peripheral.identifier)
         deviceMap[peripheral.identifier]?.connectionState = .failed
         if let idx = discoveredDevices.firstIndex(where: { $0.peripheral.identifier == peripheral.identifier }) {
             discoveredDevices[idx].connectionState = .failed

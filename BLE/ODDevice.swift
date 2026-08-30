@@ -23,7 +23,24 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// Lifecycle of the panel's configuration read, so views can distinguish "still fetching",
     /// "read from hardware", and "read failed" instead of treating a nil `config` as all three.
     /// A loaded `config` alongside `.reading` means a cached value is being refreshed on reconnect.
-    enum ConfigReadState: Equatable { case unread, reading, loaded, failed(String) }
+    ///
+    /// `.authRequired` is its own case rather than a flavour of `.failed` because it is the one
+    /// outcome with a user-actionable remedy (enter the key). Views branch on this; they must never
+    /// pattern-match error strings to detect it.
+    enum ConfigReadState: Equatable { case unread, reading, loaded, authRequired, failed(String) }
+
+    /// Where the 0x50 handshake stands. Replaces a loose `isAuthenticating` bool plus an error
+    /// string, because rate limiting has to be a *state the UI can gate on* rather than a message.
+    enum AuthPhase: Equatable {
+        case idle
+        case authenticating
+        case authenticated
+        case failed(ODAuthFailureReason)
+        /// A conservative client-side backoff. The wire carries only status 0x04 — there is no
+        /// retry-after value or reset timestamp — so this deadline is ours, not the device's, and
+        /// may wait longer than the rolling window strictly needs.
+        case rateLimited(retryNotBefore: Date)
+    }
 
     /// The lifecycle of an image send, driving the Composer's status overlay. This is the single
     /// source of truth — `isUploading` is derived from it, so there is exactly one writer.
@@ -45,11 +62,29 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     var name: String { peripheral.name ?? peripheral.identifier.uuidString }
     var deviceID: String { peripheral.identifier.uuidString }
 
+    /// In-memory mirror of the Keychain entry, seeded in `init`. The Keychain remains the only
+    /// durable store — the key is deliberately never written into the SwiftData file — but reads go
+    /// through this so SwiftUI body evaluations don't each pay a synchronous Keychain round-trip.
+    private var cachedPSK: Data?
+
+    /// Published so views re-render when a key is stored or forgotten; `psk` itself can't be
+    /// `@Published` because it's a computed write-through property.
+    @Published private(set) var hasStoredKey = false
+
+    /// True once we know this display refuses unauthenticated traffic — learned from a `..FE` reply
+    /// or a completed handshake, or seeded from `SavedDisplayEntity.requiresAuthentication` before
+    /// we have ever talked to it.
+    @Published var requiresAuthentication = false
+
+    @Published private(set) var authPhase: AuthPhase = .idle
+
     var psk: Data? {
-        get { ODAuth.loadPSK(forDevice: deviceID) }
+        get { cachedPSK }
         set {
+            cachedPSK = newValue
             if let key = newValue { ODAuth.savePSK(key, forDevice: deviceID) }
             else { ODAuth.deletePSK(forDevice: deviceID) }
+            hasStoredKey = newValue != nil
         }
     }
 
@@ -120,6 +155,31 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     // finish it without reaching into `readConfig`'s local scope.
     private var configReadFinish: ((Result<ODConfigModel, Error>) -> Void)?
 
+    /// Identifies a real link incarnation. Bumped in exactly one place — `didDisconnect()`.
+    ///
+    /// "On connect" would be ambiguous: `BLEManager.didConnect` runs before GATT readiness, and this
+    /// object only learns of readiness through `transport.onReady`, which can fire more than once
+    /// per link. Bumping on teardown alone is unambiguous and sufficient — operations from link N
+    /// hold generation G, the drop moves it to G+1, and everything afterwards (the reconnect
+    /// included) is G+1 — with no fictitious generations along the way.
+    ///
+    /// This matters because `BLEManager` reuses the same `ODDevice` across reconnects, so a late
+    /// completion from a previous link must never publish state or persist a key.
+    private var connectionGeneration: UInt64 = 0
+
+    /// Identifies one config read. Async producers (native progress, the JS completion, the
+    /// `configProgress` event, a superseding write) capture the token live when they start and must
+    /// verify it before touching any shared read state — `configReadFinish`, `configReadWatchdog`,
+    /// `configReadProgress`, `config`, `configReadState`, `configReadCompletions`, `lastError`.
+    private var configReadToken: UInt64 = 0
+    private var nextConfigReadToken: UInt64 = 0
+
+    /// The key the in-flight handshake is using, so a second caller with the *same* key can join and
+    /// one with a *different* key is rejected rather than told someone else's attempt was its own.
+    private var inFlightKey: Data?
+    /// Completions waiting on the in-flight handshake.
+    private var authCompletions: [(Result<Void, Error>) -> Void] = []
+
     init(peripheral: CBPeripheral, initialMSD: Data? = nil,
          logHandler: @escaping (LogEntry) -> Void) {
         self.peripheral = peripheral
@@ -130,6 +190,13 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // used by the original native connection path; protocol I/O is still forwarded to the
         // shared transport below.
         peripheral.delegate = self
+
+        // Seed the PSK cache once, here, rather than on every `psk` read. A stored key is also the
+        // signal that this display is locked, so the connect path can authenticate before its first
+        // config read instead of discovering `00 40 FE` the hard way.
+        cachedPSK = ODAuth.loadPSK(forDevice: peripheral.identifier.uuidString)
+        hasStoredKey = cachedPSK != nil
+        requiresAuthentication = cachedPSK != nil
 
         if let initialMSD {
             msdData = Data(initialMSD.prefix(16))
@@ -189,9 +256,15 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     }
 
     func didDisconnect() {
+        // Retire this link incarnation first, so anything that lands after this point — a late JS
+        // completion, a native task unwinding, a queued runtime event — fails its generation check
+        // and can neither publish state nor persist a key against the next connection.
+        connectionGeneration &+= 1
         runtime?.setConnected(false)
         connectionState = .disconnected
         isAuthenticated = false
+        authPhase = .idle
+        inFlightKey = nil
         if uploadPhase == .sending { failUpload("The display disconnected during upload.") }
         uploadTask?.cancel(); uploadTask = nil
         MainActor.assumeIsolated { self.nativeLink.linkDropped(nil) }   // fail any pending native upload
@@ -209,11 +282,49 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // Drain any read that was still in flight with a definitive failure so its waiters (and the
         // config-read state) don't hang; `setConnected(false)` above may also reject it, but the
         // `didComplete` guard makes whichever loses the race a no-op.
-        if configReadState == .reading {
-            configReadFinish?(.failure(ODDeviceError("The display disconnected before the configuration was read.")))
-        }
+        //
+        // Capture and clear the owned slot *before* invoking it. A waiter can synchronously start a
+        // new read from its completion, and an unconditional `configReadFinish = nil` afterwards
+        // would then clear the *new* read's terminal handler, stranding it.
+        let drainedRead = configReadFinish
         configReadFinish = nil
+        if configReadState == .reading {
+            drainedRead?(.failure(ODDeviceError("The display disconnected before the configuration was read.")))
+        }
+        // Same reasoning for auth waiters: take the list, clear it, then notify.
+        let drainedAuth = authCompletions
+        authCompletions.removeAll()
+        drainedAuth.forEach { $0(.failure(ODDeviceError("The display disconnected during authentication."))) }
         isConfigWriteInFlight = false
+    }
+
+    /// The connect-time sequence: authenticate (when we already hold a key) before reading config.
+    ///
+    /// A locked display answers an unauthenticated `0x0040` with `00 40 FE`, so a stored key means
+    /// we must handshake *first* rather than spend a round-trip learning that. Every step is chained
+    /// through completions: `withExclusiveOp` rejects overlap rather than queuing it, so firing
+    /// these together would make the later ones throw `.busy`.
+    private func beginPostConnectHandshake() {
+        let readThenFirmware: () -> Void = { [weak self] in
+            self?.readConfig { [weak self] _ in self?.readFirmware() }
+        }
+        guard let key = cachedPSK else { readThenFirmware(); return }
+        if let remaining = authCooldownRemaining {
+            trace("skipping auto-authenticate: rate-limit backoff has \(Int(remaining))s left", level: .warning)
+            readThenFirmware()
+            return
+        }
+        trace("stored key present; authenticating before the config read", level: .info)
+        authenticate(psk: key) { [weak self] result in
+            if case .failure(let error) = result {
+                // Never strand the connection on a failed handshake. An unlocked display answers the
+                // read normally, and a locked one answers `00 40 FE`, which is what drives the
+                // key-entry UI — so proceeding is strictly more informative than stopping here.
+                self?.trace("auto-authenticate failed, continuing to the config read: \(error.localizedDescription)",
+                            level: .warning)
+            }
+            readThenFirmware()
+        }
     }
 
     private func configureTransport() {
@@ -233,7 +344,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // stayed nil until a surface re-triggered it). Config is the critical path (it gates the
             // Composer/Add/Toolbox), so read it first, then read the cosmetic firmware version once
             // the gate frees. The firmware read runs on both success and failure of the config read.
-            self.readConfig { [weak self] _ in self?.readFirmware() }
+            self.beginPostConnectHandshake()
         }
         transport.onNotification = { [weak self] data in
             guard let self else { return }
@@ -417,6 +528,13 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         configReadState = .reading
         configReadProgress = 0
         if let completion { configReadCompletions.append(completion) }
+        // Identity for this read. Async producers below capture it and must prove ownership before
+        // touching shared state — `didComplete` alone is too late, because it only guards the
+        // *result*, not the watchdog/progress mutations that run ahead of it.
+        nextConfigReadToken &+= 1
+        let token = nextConfigReadToken
+        configReadToken = token
+        let generation = connectionGeneration
         var didComplete = false
         let finish: (Result<ODConfigModel, Error>) -> Void = { [weak self] result in
             guard let self, !didComplete else { return }
@@ -425,23 +543,41 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             self.configReadWatchdog = nil
             self.configReadFinish = nil
             switch result {
-            case .success: self.configReadState = .loaded
-            case .failure(let error): self.configReadState = .failed(error.localizedDescription)
+            case .success:
+                self.configReadState = .loaded
+            case .failure(let error):
+                // A locked display answers `00 40 FE`. That is the one failure with a remedy the
+                // user can act on, so it gets its own state rather than an opaque `.failed` string.
+                if Self.isAuthRequired(error) {
+                    self.configReadState = .authRequired
+                    self.requiresAuthentication = true
+                    self.isAuthenticated = false
+                } else {
+                    self.configReadState = .failed(error.localizedDescription)
+                }
             }
             let waiters = self.configReadCompletions
             self.configReadCompletions.removeAll()
             waiters.forEach { $0(result) }
         }
         configReadFinish = finish
+        /// True while this read still owns the shared slots. Everything below checks it before any
+        /// mutation, at callback entry — a field-by-field check would miss `lastError` and
+        /// `reparseAdvertisement()`'s side effects.
+        let ownsRead: () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return self.configReadToken == token && self.connectionGeneration == generation
+        }
         if useNativeProtocol {
             // Native transport only: the raw blob still goes to ODConfig.parse (toolbox engine).
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 do {
                     let bytes = try await self.protocolClient.readConfigBlob { progress in
+                        guard ownsRead() else { return }
                         self.configReadProgress = progress
                     }
-                    guard !didComplete else { return }
+                    guard ownsRead(), !didComplete else { return }
                     let model = try ODConfig.parse(bytes)
                     self.config = model
                     self.configReadProgress = 1
@@ -450,8 +586,12 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     self.reparseAdvertisement()
                     finish(.success(model))
                 } catch {
-                    guard !didComplete else { return }
-                    self.lastError = "Configuration read failed: \(error.localizedDescription)"
+                    guard ownsRead(), !didComplete else { return }
+                    // The dedicated key-entry UI covers `.authRequired`, so don't also pin a red
+                    // banner for it — that reads as a fault rather than a prompt.
+                    if !Self.isAuthRequired(error) {
+                        self.lastError = "Configuration read failed: \(error.localizedDescription)"
+                    }
                     self.configReadProgress = 0
                     finish(.failure(error))
                 }
@@ -459,8 +599,17 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
         armConfigReadWatchdog()
-        call("readConfig") { [weak self] result in
+        // `readToken` comes back on every `configProgress` event so a superseded read's queued
+        // events can be told apart from the live one's (see `handleRuntimeEvent`).
+        call("readConfig", arguments: ["readToken": NSNumber(value: token)]) { [weak self] result in
             guard let self else { return }
+            // Ownership first. This handler used to cancel and clear `configReadWatchdog` *before*
+            // checking whether its read was still current, so a stale resolution stripped the
+            // successor read's stall timeout and left it running unguarded.
+            guard ownsRead() else {
+                self.trace("readConfig JS resolved for a superseded read; ignoring", level: .info)
+                return
+            }
             self.configReadWatchdog?.cancel()
             self.configReadWatchdog = nil
             // The read may already have been settled out from under this JS resolution — by the
@@ -498,11 +647,24 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 }
             case .failure(let error):
                 self.trace("readConfig failed: \(error.localizedDescription)", level: .error)
-                self.lastError = error.localizedDescription
+                if !Self.isAuthRequired(error) { self.lastError = error.localizedDescription }
                 self.configReadProgress = 0
                 finish(.failure(error))
             }
         }
+    }
+
+    /// Does this error mean "the display refused unauthenticated traffic"?
+    ///
+    /// The native path throws `ODProtocolError.authRequired` outright. The JS fallback can't: the
+    /// SHA-pinned `ble-common.js` rejects with a plain `Error('Authentication required (0xFE)')`,
+    /// which arrives as an opaque `RuntimeError.operationFailed`. This is the **single** place that
+    /// string is matched — everything downstream branches on `ConfigReadState.authRequired`, never
+    /// on message text.
+    static func isAuthRequired(_ error: Error) -> Bool {
+        if case ODProtocolError.authRequired = error { return true }
+        guard case OpenDisplayJSRuntime.RuntimeError.operationFailed(let message) = error else { return false }
+        return message.contains("0xFE") || message.localizedCaseInsensitiveContains("authentication required")
     }
 
     /// `ble-common.js` has no timeout on the chunked config-read exchange: if the device stops
@@ -551,6 +713,12 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
         trace("writeConfig requested; \(data.count) bytes; appState=\(connectionState), peripheralState=\(peripheral.state.rawValue)")
         isConfigWriteInFlight = true
+        // Capture, at start, the exact read this write is entitled to supersede — and the link it
+        // belongs to. Checking only `configReadState == .reading` at completion time would let a
+        // write that outlived a disconnect settle a *different*, later read with a stale model.
+        // A token of 0 means no read was in flight when the write began, so it may never supersede.
+        let supersedableRead = (configReadState == .reading) ? configReadToken : 0
+        let writeGeneration = connectionGeneration
         var didComplete = false
         let finish: (Bool) -> Void = { [weak self] succeeded in
             guard !didComplete else { return }
@@ -565,9 +733,13 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // written config) instead of letting its stale pre-write result land afterwards and flip
             // `config` back. `config` is already set to `model` on the ack/JS paths below; the late
             // read resolution is then ignored via readConfig's `didComplete` guard.
-            if succeeded, self?.configReadState == .reading {
-                self?.trace("writeConfig superseding the in-flight config read with the written model", level: .info)
-                self?.configReadFinish?(.success(model))
+            if succeeded, let self,
+               supersedableRead != 0,
+               self.connectionGeneration == writeGeneration,
+               self.configReadToken == supersedableRead,
+               self.configReadState == .reading {
+                self.trace("writeConfig superseding the in-flight config read with the written model", level: .info)
+                self.configReadFinish?(.success(model))
             }
             completion?(succeeded)
         }
@@ -662,50 +834,191 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - Authentication
 
-    func authenticate(psk: Data) {
+    /// True while the 0x50 handshake owns the protocol client. `ODProtocolClient.withExclusiveOp`
+    /// *rejects* overlap rather than queuing it, so anything started now would draw `.busy`.
+    var isBusyWithHandshake: Bool { authPhase == .authenticating }
+
+    /// Still inside the device's rate-limit backoff, if any.
+    var authCooldownRemaining: TimeInterval? {
+        guard case .rateLimited(let retryNotBefore) = authPhase else { return nil }
+        let remaining = retryNotBefore.timeIntervalSinceNow
+        return remaining > 0 ? remaining : nil
+    }
+
+    /// Our own backoff after the device reports rate limiting. The wire carries no retry-after
+    /// value, and the documented window is ">=10 attempts per 60s", so a full minute is the
+    /// conservative choice — it may wait longer than strictly necessary.
+    private static let rateLimitBackoff: TimeInterval = 60
+
+    /// Run the 0x50 handshake.
+    ///
+    /// - Parameter completion: called exactly once with this attempt's outcome. A caller offering
+    ///   the *same* key as the attempt in flight joins it; a caller offering a *different* key is
+    ///   rejected rather than joined, because reporting someone else's result as its own would let
+    ///   it persist an unvalidated key.
+    ///
+    /// Does **not** persist the key on success — that is `unlock(psk:)`'s job, and only after the
+    /// handshake proves it.
+    func authenticate(psk: Data, completion: ((Result<Void, Error>) -> Void)? = nil) {
         guard psk.count == 16 else {
-            lastError = "Authentication key must contain exactly 16 bytes"
+            let error = ODDeviceError("Authentication key must contain exactly 16 bytes")
+            lastError = error.localizedDescription
+            completion?(.failure(error))
+            return
+        }
+        if let remaining = authCooldownRemaining {
+            let error = ODDeviceError("Too many attempts. Try again in \(Int(remaining.rounded(.up))) seconds.")
+            lastError = error.localizedDescription
+            completion?(.failure(error))
+            return
+        }
+        if let inFlight = inFlightKey {
+            guard Self.constantTimeEqual(inFlight, psk) else {
+                // Never join across different credentials: if the in-flight attempt succeeded, this
+                // caller would be told *its* key worked and would go on to store it.
+                let error = ODDeviceError("A different key is already being tried. Wait for it to finish.")
+                completion?(.failure(error))
+                return
+            }
+            trace("authenticate joining the in-flight handshake for the same key", level: .info)
+            if let completion { authCompletions.append(completion) }
             return
         }
 
+        inFlightKey = psk
+        authPhase = .authenticating
+        if let completion { authCompletions.append(completion) }
+        let generation = connectionGeneration
+        var didComplete = false
+
+        let finish: (Result<Void, Error>) -> Void = { [weak self] result in
+            guard let self, !didComplete else { return }
+            didComplete = true
+            self.authWatchdog?.cancel()
+            self.authWatchdog = nil
+            // A completion from a retired link may neither publish state nor persist a key. Still
+            // drain *this* attempt's waiters so nobody hangs — but never the current attempt's.
+            guard self.connectionGeneration == generation else {
+                let waiters = self.authCompletions
+                self.authCompletions.removeAll()
+                waiters.forEach { $0(result) }
+                return
+            }
+            self.inFlightKey = nil
+            switch result {
+            case .success:
+                self.isAuthenticated = true
+                self.requiresAuthentication = true
+                self.authPhase = .authenticated
+                self.lastError = nil
+            case .failure(let error):
+                self.isAuthenticated = false
+                if case ODProtocolError.authFailed(let reason) = error {
+                    switch reason {
+                    case .notConfigured:
+                        // The display has no encryption at all, so a stored key is stale. Drop it,
+                        // or `beginPostConnectHandshake` burns a pointless handshake every connect.
+                        // NOT `.authenticated` — the unauthenticated read that follows proves access.
+                        self.psk = nil
+                        self.requiresAuthentication = false
+                        self.authPhase = .idle
+                    case .rateLimited:
+                        // Keep the key: retrying is what caused this.
+                        self.requiresAuthentication = true
+                        self.authPhase = .rateLimited(retryNotBefore: Date().addingTimeInterval(Self.rateLimitBackoff))
+                        self.lastError = error.localizedDescription
+                    default:
+                        self.requiresAuthentication = true
+                        self.authPhase = .failed(reason)
+                        self.lastError = error.localizedDescription
+                    }
+                } else {
+                    self.authPhase = .idle
+                    self.lastError = error.localizedDescription
+                }
+                self.trace("authenticate failed: \(error.localizedDescription)", level: .error)
+            }
+            // Clear owned state before notifying: a completion may synchronously call `unlock` again.
+            let waiters = self.authCompletions
+            self.authCompletions.removeAll()
+            waiters.forEach { $0(result) }
+        }
+
         if useNativeProtocol {
-            // Native 0x50 handshake; the client owns the timeout and, on success, transparently
-            // CCM-wraps all subsequent traffic (config/upload/commands already route through it).
+            // Native 0x50 handshake; on success the client transparently CCM-wraps all subsequent
+            // traffic (config/upload/commands already route through it).
+            //
+            // Deliberately no outer watchdog here. The package owns two 10s stage timeouts, and a
+            // `DispatchWorkItem` could not cancel this task or release `withExclusiveOp`'s gate — it
+            // would report failure to the UI while the handshake ran on and later established a
+            // session the UI believes failed. A real disconnect unwinds it via `failPending`.
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 do {
                     try await self.protocolClient.authenticate(masterKey: psk)
-                    self.isAuthenticated = true
+                    // The secure channel is the authority; `isAuthenticated` is only its mirror.
+                    guard self.protocolClient.isSessionEstablished else {
+                        finish(.failure(ODProtocolError.authFailed(.proofMismatch)))
+                        return
+                    }
+                    finish(.success(()))
                 } catch {
-                    self.isAuthenticated = false
-                    self.lastError = error.localizedDescription
-                    self.trace("authenticate (native) failed: \(error.localizedDescription)", level: .error)
+                    finish(.failure(error))
                 }
             }
             return
         }
 
-        var didComplete = false
+        // The JS path has no internal timeout, so it keeps its watchdog.
         authWatchdog?.cancel()
-        authWatchdog = makeWatchdog(operation: "authenticate") { [weak self] in
-            guard !didComplete else { return }
-            didComplete = true
-            self?.isAuthenticated = false
-            self?.lastError = "Authentication timed out. The device did not respond."
+        authWatchdog = makeWatchdog(operation: "authenticate") {
+            finish(.failure(ODDeviceError("Authentication timed out. The display did not respond.")))
         }
-        call("authenticate", arguments: ["keyHex": psk.hexString.replacingOccurrences(of: " ", with: "")]) {
-            [weak self] result in
-            self?.authWatchdog?.cancel()
-            self?.authWatchdog = nil
-            guard !didComplete else { return }
-            didComplete = true
+        call("authenticate", arguments: ["keyHex": psk.hexString.replacingOccurrences(of: " ", with: "")]) { result in
+            finish(result.map { _ in () })
+        }
+    }
+
+    /// Authenticate and, only once the handshake proves the key, persist it and re-run the config
+    /// read the locked display refused. **The only place a PSK is written to the Keychain.**
+    func unlock(psk key: Data, completion: ((Result<Void, Error>) -> Void)? = nil) {
+        authenticate(psk: key) { [weak self] result in
+            guard let self else { completion?(result); return }
             switch result {
-            case .success: self?.isAuthenticated = true
+            case .success:
+                if !ODAuth.savePSK(key, forDevice: self.deviceID) {
+                    // Don't claim success we can't back: without a stored key the next connect
+                    // silently prompts again, which looks like the unlock never happened.
+                    self.lastError = "Unlocked, but the key could not be saved to the Keychain."
+                    self.trace("unlock: Keychain save failed", level: .error)
+                } else {
+                    self.cachedPSK = key
+                    self.hasStoredKey = true
+                }
+                // The read that `00 40 FE` rejected.
+                self.readConfig { _ in }
+                completion?(.success(()))
             case .failure(let error):
-                self?.isAuthenticated = false
-                self?.lastError = error.localizedDescription
+                // Only an explicit AUTH_STATUS_FAILED condemns the key. `.proofMismatch` fires after
+                // the device accepted our proof, so it implicates the response or the peer, not the
+                // credential. And only forget the key this attempt actually used, so a slow failure
+                // can't wipe a newer key another caller just stored.
+                if case ODProtocolError.authFailed(.wrongKey) = error,
+                   let stored = self.cachedPSK, Self.constantTimeEqual(stored, key) {
+                    self.psk = nil
+                    self.trace("unlock: forgetting the stored key the device rejected", level: .info)
+                }
+                completion?(.failure(error))
             }
         }
+    }
+
+    /// Length-independent, early-exit-free comparison, so key handling never leaks timing.
+    private static func constantTimeEqual(_ a: Data, _ b: Data) -> Bool {
+        guard a.count == b.count else { return false }
+        var diff: UInt8 = 0
+        for (x, y) in zip(a, b) { diff |= x ^ y }
+        return diff == 0
     }
 
     // MARK: - Image upload
@@ -912,6 +1225,15 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 armUploadWatchdog()
             }
         case "configProgress":
+            // Only the read that emitted this event may move its progress or re-arm its watchdog.
+            // Runtime events are queued, so one from a superseded read can arrive after a newer read
+            // has started; without the token it would perturb the live read's progress and timing.
+            let eventToken = (payload["readToken"] as? NSNumber)?.uint64Value
+            guard eventToken == configReadToken else {
+                trace("ignoring configProgress from a superseded read (token \(eventToken.map(String.init) ?? "nil"))",
+                      level: .info)
+                break
+            }
             let received = (payload["received"] as? NSNumber)?.doubleValue ?? 0
             let total = max(1, (payload["total"] as? NSNumber)?.doubleValue ?? 1)
             configReadProgress = min(1, received / total)
