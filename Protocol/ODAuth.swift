@@ -19,17 +19,28 @@ struct ODAuth {
     ///   believes they already saved.
     @discardableResult
     static func savePSK(_ psk: Data, forDevice deviceID: String) -> Bool {
-        let query: [CFString: Any] = [
+        // Update in place when an entry exists, rather than delete-then-add. The old sequence
+        // destroyed a perfectly good credential first, so a failing add left the display with no
+        // key at all — worse than having kept the previous one.
+        let identity: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrAccount: deviceID,
             kSecAttrService: "com.opendisplay.psk",
-            kSecValueData: psk,
-            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlock,
         ]
-        SecItemDelete(query as CFDictionary)
-        let status = SecItemAdd(query as CFDictionary, nil)
-        if status != errSecSuccess {
-            log.error("savePSK: SecItemAdd failed with status \(status)")
+        let updateStatus = SecItemUpdate(identity as CFDictionary,
+                                         [kSecValueData: psk] as CFDictionary)
+        if updateStatus == errSecSuccess { return true }
+        guard updateStatus == errSecItemNotFound else {
+            log.error("savePSK: SecItemUpdate failed with status \(updateStatus)")
+            return false
+        }
+
+        var addQuery = identity
+        addQuery[kSecValueData] = psk
+        addQuery[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlock
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        if addStatus != errSecSuccess {
+            log.error("savePSK: SecItemAdd failed with status \(addStatus)")
             return false
         }
         return true

@@ -149,4 +149,35 @@ final class EncryptedSetupTests: XCTestCase {
         XCTAssertEqual(b.count, 16)
         XCTAssertNotEqual(a, b)
     }
+
+    /// Replacing a key must not pass through a window with no key stored. The old delete-then-add
+    /// sequence destroyed a valid credential before knowing the replacement would land, so a failed
+    /// add left the display with nothing.
+    func testReplacingAKeyOverwritesInPlace() {
+        let deviceID = "test-\(UUID().uuidString)"
+        defer { ODAuth.deletePSK(forDevice: deviceID) }
+
+        let first = Data(repeating: 0x11, count: 16)
+        let second = Data(repeating: 0x22, count: 16)
+
+        XCTAssertTrue(ODAuth.savePSK(first, forDevice: deviceID))
+        XCTAssertEqual(ODAuth.loadPSK(forDevice: deviceID), first)
+
+        XCTAssertTrue(ODAuth.savePSK(second, forDevice: deviceID))
+        XCTAssertEqual(ODAuth.loadPSK(forDevice: deviceID), second)
+
+        // Exactly one entry — an update, not an accumulating pile of adds.
+        XCTAssertEqual(ODAuth.loadPSK(forDevice: deviceID), second)
+    }
+
+    /// Saving over an existing entry repeatedly must stay stable, since every successful unlock
+    /// re-saves the key.
+    func testRepeatedSavesAreIdempotent() {
+        let deviceID = "test-\(UUID().uuidString)"
+        defer { ODAuth.deletePSK(forDevice: deviceID) }
+
+        let key = Data(repeating: 0xAB, count: 16)
+        for _ in 0..<5 { XCTAssertTrue(ODAuth.savePSK(key, forDevice: deviceID)) }
+        XCTAssertEqual(ODAuth.loadPSK(forDevice: deviceID), key)
+    }
 }

@@ -177,8 +177,15 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// The key the in-flight handshake is using, so a second caller with the *same* key can join and
     /// one with a *different* key is rejected rather than told someone else's attempt was its own.
     private var inFlightKey: Data?
-    /// Completions waiting on the in-flight handshake.
+    /// Completions waiting on the in-flight handshake. Owned by exactly one attempt at a time —
+    /// see `authAttemptToken`.
     private var authCompletions: [(Result<Void, Error>) -> Void] = []
+    /// Identifies one handshake attempt, so a late completion can tell "I still own the waiter list"
+    /// from "this list now belongs to a newer attempt". Without it, a task from a retired link would
+    /// drain the *next* connection's callbacks with its own stale result — telling a caller its key
+    /// succeeded (or failed) when that verdict belonged to a different attempt entirely.
+    private var authAttemptToken: UInt64 = 0
+    private var nextAuthAttemptToken: UInt64 = 0
 
     init(peripheral: CBPeripheral, initialMSD: Data? = nil,
          logHandler: @escaping (LogEntry) -> Void) {
@@ -260,6 +267,10 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // completion, a native task unwinding, a queued runtime event — fails its generation check
         // and can neither publish state nor persist a key against the next connection.
         connectionGeneration &+= 1
+        // Retire the handshake attempt too, so a task still unwinding from the old link can't match
+        // and drain the next connection's waiters below.
+        nextAuthAttemptToken &+= 1
+        authAttemptToken = nextAuthAttemptToken
         runtime?.setConnected(false)
         connectionState = .disconnected
         isAuthenticated = false
@@ -889,21 +900,24 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         authPhase = .authenticating
         if let completion { authCompletions.append(completion) }
         let generation = connectionGeneration
+        nextAuthAttemptToken &+= 1
+        let attempt = nextAuthAttemptToken
+        authAttemptToken = attempt
         var didComplete = false
 
         let finish: (Result<Void, Error>) -> Void = { [weak self] result in
             guard let self, !didComplete else { return }
             didComplete = true
-            self.authWatchdog?.cancel()
-            self.authWatchdog = nil
-            // A completion from a retired link may neither publish state nor persist a key. Still
-            // drain *this* attempt's waiters so nobody hangs — but never the current attempt's.
-            guard self.connectionGeneration == generation else {
-                let waiters = self.authCompletions
-                self.authCompletions.removeAll()
-                waiters.forEach { $0(result) }
+            // Only touch the waiter list while this attempt still owns it. A completion from a
+            // retired link must publish nothing, persist nothing, and — critically — must NOT drain
+            // callbacks that now belong to a newer attempt with a verdict from the old one. Its own
+            // waiters were already drained by `didDisconnect`, so there is nothing left to notify.
+            guard self.authAttemptToken == attempt, self.connectionGeneration == generation else {
+                self.trace("ignoring an authenticate completion from a superseded attempt", level: .info)
                 return
             }
+            self.authWatchdog?.cancel()
+            self.authWatchdog = nil
             self.inFlightKey = nil
             switch result {
             case .success:
@@ -986,17 +1000,26 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             guard let self else { completion?(result); return }
             switch result {
             case .success:
-                if !ODAuth.savePSK(key, forDevice: self.deviceID) {
-                    // Don't claim success we can't back: without a stored key the next connect
-                    // silently prompts again, which looks like the unlock never happened.
-                    self.lastError = "Unlocked, but the key could not be saved to the Keychain."
-                    self.trace("unlock: Keychain save failed", level: .error)
-                } else {
+                let saved = ODAuth.savePSK(key, forDevice: self.deviceID)
+                if saved {
                     self.cachedPSK = key
                     self.hasStoredKey = true
+                } else {
+                    self.trace("unlock: Keychain save failed", level: .error)
                 }
-                // The read that `00 40 FE` rejected.
+                // The session is authenticated either way, so load the config that `00 40 FE`
+                // rejected — the read is what unblocks Save, and it doesn't depend on persistence.
                 self.readConfig { _ in }
+                guard saved else {
+                    // Report failure so the key-entry UI stays open with the key still in the field.
+                    // Returning success here cleared the field and dismissed the sheet, and then the
+                    // next connect prompted again — looking to the user like the unlock never took.
+                    let error = ODDeviceError("Unlocked, but the key could not be saved. "
+                                              + "You'll be asked for it again next time.")
+                    self.lastError = error.localizedDescription
+                    completion?(.failure(error))
+                    return
+                }
                 completion?(.success(()))
             case .failure(let error):
                 // Only an explicit AUTH_STATUS_FAILED condemns the key. `.proofMismatch` fires after

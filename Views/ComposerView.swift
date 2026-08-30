@@ -1492,7 +1492,10 @@ private struct UnlockPrompt<Sheet: View>: ViewModifier {
     func body(content: Content) -> some View {
         content
             .sheet(isPresented: $isPresented) { sheet() }
-            .onChange(of: configReadState) { _, state in
+            // `initial: true` so opening the Composer onto a device that is *already* `.authRequired`
+            // still prompts. Reacting only to changes missed that case: the refusal often happens
+            // during the connect-time read, before this view exists.
+            .onChange(of: configReadState, initial: true) { _, state in
                 if state == .authRequired { isPresented = true }
             }
     }
