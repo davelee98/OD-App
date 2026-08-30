@@ -68,7 +68,10 @@ final class AuthFlowTests: XCTestCase {
         do {
             try await client.authenticate(masterKey: Data(master))
             XCTFail("expected mutual-auth failure")
-        } catch ODProtocolError.authFailed { } catch { XCTFail("unexpected: \(error)") }
+        } catch ODProtocolError.authFailed(.proofMismatch) {
+            // Specifically NOT .wrongKey: the device accepted our proof, so this condemns the
+            // response/peer, not the stored credential. Callers must not delete the key on this.
+        } catch { XCTFail("unexpected: \(error)") }
         XCTAssertFalse(client.isSessionEstablished)
     }
 
@@ -84,7 +87,91 @@ final class AuthFlowTests: XCTestCase {
         do {
             try await client.authenticate(masterKey: Data(master))
             XCTFail("expected authFailed")
-        } catch ODProtocolError.authFailed { } catch { XCTFail("unexpected: \(error)") }
+        } catch ODProtocolError.authFailed(.wrongKey) { } catch { XCTFail("unexpected: \(error)") }
+    }
+
+    /// The display has no encryption at all. Callers treat this as "drop the stale key", not as a
+    /// user-facing failure — so it must be distinguishable from `.wrongKey`.
+    func testNotConfiguredStatusMapsToNotConfigured() async {
+        let link = MockLink()
+        link.responder = { frame in
+            let b = [UInt8](frame)
+            guard b.count >= 2, b[1] == 0x50 else { return [] }
+            return [Data([0x00, 0x50, AUTH_STATUS_NOT_CONFIG])]
+        }
+        let client = ODProtocolClient(link: link)
+        client.testClientNonceOverride = clientNonce
+        do {
+            try await client.authenticate(masterKey: Data(master))
+            XCTFail("expected authFailed(.notConfigured)")
+        } catch ODProtocolError.authFailed(.notConfigured) { } catch { XCTFail("unexpected: \(error)") }
+    }
+
+    /// Rate limiting must keep the stored key — retrying is what caused it.
+    func testRateLimitStatusMapsToRateLimited() async {
+        let link = MockLink()
+        link.responder = { frame in
+            let b = [UInt8](frame)
+            guard b.count >= 2, b[1] == 0x50 else { return [] }
+            return [Data([0x00, 0x50, AUTH_STATUS_RATE_LIMIT])]
+        }
+        let client = ODProtocolClient(link: link)
+        client.testClientNonceOverride = clientNonce
+        do {
+            try await client.authenticate(masterKey: Data(master))
+            XCTFail("expected authFailed(.rateLimited)")
+        } catch ODProtocolError.authFailed(.rateLimited) { } catch { XCTFail("unexpected: \(error)") }
+    }
+
+    /// Any unrecognized status carries its raw byte through, rather than collapsing to a generic.
+    func testUnknownStatusCarriesRawByte() async {
+        let link = MockLink()
+        link.responder = { frame in
+            let b = [UInt8](frame)
+            guard b.count >= 2, b[1] == 0x50 else { return [] }
+            return [Data([0x00, 0x50, 0xFF])]   // AUTH_STATUS_ERROR
+        }
+        let client = ODProtocolClient(link: link)
+        client.testClientNonceOverride = clientNonce
+        do {
+            try await client.authenticate(masterKey: Data(master))
+            XCTFail("expected authFailed(.deviceError)")
+        } catch ODProtocolError.authFailed(.deviceError(0xFF)) { } catch { XCTFail("unexpected: \(error)") }
+    }
+
+    /// The regression that guards the connect sequence. `withExclusiveOp` REJECTS overlap rather
+    /// than serializing it, so the post-connect chain (auth -> config read -> firmware read) only
+    /// works if the gate is released after *every* step. `testPostAuthInboundIsDecrypted` covers
+    /// auth -> one op; this covers auth -> op -> op, which is the shape the chain actually uses.
+    func testGateReleasesBetweenChainedPostAuthOperations() async throws {
+        let link = MockLink()
+        link.responder = { [self] frame in
+            let b = [UInt8](frame)
+            guard b.count >= 2, b[1] == 0x50 else {
+                // The captured encrypted-MSD envelope is counter-bound, so it only decrypts at the
+                // counter it was recorded at. Replaying it proves the gate re-opened; a `.busy`
+                // rejection would surface before any decryption is attempted.
+                if !b.isEmpty { return [Data(hex("0044f2d55473ec48de0a0000000000000000fb13bbe8c8b205c9ff414fdc61b345aa25e55ed99ce461810cb8a664d4"))] }
+                return []
+            }
+            if b.count == 3 { return [Data([0x00, 0x50, AUTH_STATUS_SUCCESS] + serverNonce + deviceID)] }
+            return [Data([0x00, 0x50, AUTH_STATUS_SUCCESS] + hex(serverProof))]
+        }
+        let client = ODProtocolClient(link: link)
+        client.testClientNonceOverride = clientNonce
+
+        try await client.authenticate(masterKey: Data(master))
+        _ = try await client.readMSD()          // gate released after auth
+
+        // A second op must not draw `.busy`. It fails on the counter-bound envelope instead, which
+        // is a decryption/parse error — proving the gate itself re-opened.
+        do {
+            _ = try await client.readMSD()
+        } catch ODProtocolError.busy {
+            XCTFail("the exclusive-op gate was not released after the previous operation")
+        } catch {
+            // Any non-.busy error is fine here; only the gate is under test.
+        }
     }
 
     /// After auth, a gated command must go out CCM-wrapped with the derived session_id at counter 0.

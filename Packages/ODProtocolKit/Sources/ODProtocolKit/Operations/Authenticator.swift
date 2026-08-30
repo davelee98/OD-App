@@ -40,7 +40,7 @@ struct Authenticator {
             if p.count >= 21 { deviceID = Array(p[17..<21]) }   // wire order; not host-endian
             break
         }
-        guard !serverNonce.isEmpty else { throw ODProtocolError.authFailed("no fresh challenge (session busy)") }
+        guard !serverNonce.isEmpty else { throw ODProtocolError.authFailed(.noFreshChallenge) }
 
         // --- Step 2: prove key knowledge, receive the device's proof. ---
         let clientNonce = makeClientNonce()
@@ -61,7 +61,7 @@ struct Authenticator {
         let expected = try ODCrypto.serverProof(sessionKey: sessionKey, serverNonce: serverNonce,
                                                 clientNonce: clientNonce, deviceID: deviceID)
         guard ODCrypto.constantTimeEqual(expected, serverProof) else {
-            throw ODProtocolError.authFailed("mutual authentication failed: server proof mismatch")
+            throw ODProtocolError.authFailed(.proofMismatch)
         }
         let sessionID = try ODCrypto.deriveSessionID(sessionKey: sessionKey, clientNonce: clientNonce, serverNonce: serverNonce)
         return Session(key: sessionKey, id: sessionID)
@@ -69,13 +69,17 @@ struct Authenticator {
 
     /// Map a 0x50 status byte to an error; `CHALLENGE/SUCCESS (0x00)` and `ALREADY (0x02)` are not
     /// terminal here (the caller handles ALREADY's retry).
+    ///
+    /// `stage` is no longer folded into the error payload — the reason is now typed, and which stage
+    /// produced it doesn't change what the caller should do. It stays a parameter because the traces
+    /// around the call sites still distinguish challenge from proof.
     private static func throwIfStatusBad(_ status: UInt8, stage: String) throws {
         switch status {
         case AUTH_STATUS_SUCCESS, AUTH_STATUS_ALREADY: return
-        case AUTH_STATUS_FAILED:     throw ODProtocolError.authFailed("\(stage): wrong key")
-        case AUTH_STATUS_NOT_CONFIG: throw ODProtocolError.authFailed("\(stage): encryption not configured on device")
-        case AUTH_STATUS_RATE_LIMIT: throw ODProtocolError.authFailed("\(stage): rate limited (too many attempts)")
-        default:                     throw ODProtocolError.authFailed("\(stage): device error 0x\(String(status, radix: 16))")
+        case AUTH_STATUS_FAILED:     throw ODProtocolError.authFailed(.wrongKey)
+        case AUTH_STATUS_NOT_CONFIG: throw ODProtocolError.authFailed(.notConfigured)
+        case AUTH_STATUS_RATE_LIMIT: throw ODProtocolError.authFailed(.rateLimited)
+        default:                     throw ODProtocolError.authFailed(.deviceError(status))
         }
     }
 }
