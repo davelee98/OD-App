@@ -117,6 +117,8 @@ struct ComposerView: View {
     @State private var hasPhysicalConnection = false
     @State private var connectionAlertMessage: String?
     @State private var connectionTimeoutTask: Task<Void, Never>?
+    /// The user tapped "Not Now" on the unlock sheet; re-armed by Send or a new lock prompt.
+    @State private var unlockDeclined = false
 
     private var targetIdentifier: UUID? { UUID(uuidString: entity.id) }
     private var device: ODDevice? {
@@ -206,6 +208,10 @@ struct ComposerView: View {
             }
         }
         .sheet(isPresented: $showPreview) { previewSheet }
+        .sheet(isPresented: unlockSheetIsPresented) {
+            if let device { UnlockDisplaySheet(device: device) }
+        }
+        .onChange(of: device?.keyPrompt) { _, prompt in if prompt == nil { unlockDeclined = false } }
         .confirmationDialog("Reset the page?", isPresented: $showResetConfirm, titleVisibility: .visible) {
             Button("Reset Page", role: .destructive) { resetPage() }
             Button("Cancel", role: .cancel) {}
@@ -832,6 +838,13 @@ struct ComposerView: View {
 
     // MARK: - Actions
 
+    private var unlockSheetIsPresented: Binding<Bool> {
+        Binding(
+            get: { device?.keyPrompt != nil && !unlockDeclined && !isWaitingForConnection },
+            set: { if !$0 { unlockDeclined = true } }
+        )
+    }
+
     private var connectionAlertIsPresented: Binding<Bool> {
         Binding(
             get: { connectionAlertMessage != nil },
@@ -1160,6 +1173,10 @@ struct ComposerView: View {
 
     private func sendPhoto() {
         guard let device else { return }
+        if device.keyPrompt != nil {
+            unlockDeclined = false   // re-offer the unlock sheet instead of a doomed upload
+            return
+        }
         guard let deviceConfig = device.config else {
             device.failUpload("Waiting for a valid device configuration before encoding the image.")
             device.readConfig()

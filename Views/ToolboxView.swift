@@ -105,6 +105,9 @@ struct ToolboxView: View {
     private var formBody: some View {
         Form {
             connectionSection
+            if let device, device.keyPrompt != nil {
+                UnlockDisplaySection(device: device)
+            }
 
             Section {
                 Picker("Toolbox mode", selection: $mode) {
@@ -261,7 +264,7 @@ struct ToolboxView: View {
                     case .authenticated:
                         Label("Authenticated", systemImage: "checkmark.shield.fill").foregroundStyle(.green)
                     case .canAuthenticate(let key):
-                        Button("Authenticate") { device.authenticate(psk: key) }
+                        Button("Authenticate") { device.unlock(with: key) }
                     }
                 }
                 Button(role: .destructive) { ble.disconnect() } label: {
@@ -499,10 +502,7 @@ struct ToolboxView: View {
                     Button("Generate Random Key") { encryptionKey = randomKey() }
                     if let device, encryptionKey.count == 32, !device.isAuthenticated {
                         Button("Authenticate with This Key") {
-                            if let key = Data(hexString: encryptionKey) {
-                                device.psk = key
-                                device.authenticate(psk: key)
-                            }
+                            if let key = Data(hexString: encryptionKey) { device.unlock(with: key) }
                         }
                     }
                 }
@@ -898,6 +898,8 @@ struct ToolboxView: View {
 
     private func authenticationRowState(for device: ODDevice) -> AuthenticationRowState? {
         if device.isAuthenticated { return .authenticated }
+        // Locked: the unlock section below the connection row owns key entry.
+        if device.keyPrompt != nil || device.isUnlocking { return nil }
         if let key = device.psk { return .canAuthenticate(key) }
         return nil
     }

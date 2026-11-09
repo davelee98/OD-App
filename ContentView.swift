@@ -241,6 +241,9 @@ struct AddDisplaySheet: View {
                     }
                 }
             }
+            if let device, device.keyPrompt != nil {
+                UnlockDisplaySection(device: device)
+            }
             Section("Name") { TextField("e.g. Kitchen Display", text: $friendlyName) }
             Section("Location") { TextField("e.g. Kitchen", text: $deviceLocation) }
             if let entity {
@@ -279,6 +282,13 @@ struct AddDisplaySheet: View {
                 Text("\(cfg.displayWidth)×\(cfg.displayHeight) · \(cfg.colorSchemeName)")
                     .font(.caption).foregroundStyle(.secondary)
                 if state == .reading { ProgressView().controlSize(.mini) }
+            }
+        } else if device?.keyPrompt != nil || device?.isUnlocking == true {
+            HStack(spacing: 6) {
+                if device?.isUnlocking == true { ProgressView().controlSize(.mini) }
+                Label(device?.isUnlocking == true ? "Unlocking…" : "Locked: enter the display's key below",
+                      systemImage: "lock.fill")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         } else if case .failed = state {
             VStack(alignment: .leading, spacing: 4) {
@@ -357,6 +367,8 @@ struct DevicePickerContent: View {
     @EnvironmentObject private var ble: BLEManager
     /// Persisted: a user whose display advertises a non-OD name needs this on every launch.
     @AppStorage("showAllBLEDevices") private var showAllDevices = false
+    @State private var showScanner = false
+    @State private var scanError: String?
 
     /// The manager stores every discovered peripheral; filtering happens here so flipping the
     /// toggle never requires a rescan. With Show All on, likely-OD devices sort first (stable).
@@ -383,6 +395,25 @@ struct DevicePickerContent: View {
 
     private var deviceList: some View {
         List {
+            Section {
+                Button { showScanner = true } label: {
+                    Label("Scan Display QR Code", systemImage: "qrcode.viewfinder")
+                }
+                .disabled(ble.pendingLink != nil)
+                if let link = ble.pendingLink {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Looking for \(link.deviceName)…").foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Cancel") { ble.cancelLinkSearch() }.buttonStyle(.borderless)
+                    }
+                }
+                if let message = scanError ?? ble.connectionError {
+                    Text(message).font(.caption).foregroundStyle(.orange)
+                }
+            } footer: {
+                Text("The QR code on the display's screen identifies it and, if it's encrypted, carries its key.")
+            }
             if visibleDevices.isEmpty {
                 HStack {
                     Spacer()
@@ -416,6 +447,17 @@ struct DevicePickerContent: View {
             }
         }
         .listStyle(.insetGrouped)
+        .sheet(isPresented: $showScanner) {
+            QRScannerSheet(prompt: "Point the camera at the QR code on the display.") { payload in
+                showScanner = false
+                if let link = ODLandingLink.parse(payload) {
+                    scanError = nil
+                    ble.connect(to: link)
+                } else {
+                    scanError = "That isn't an OpenDisplay QR code."
+                }
+            }
+        }
     }
 
     private func unavailable(_ title: String, _ message: String) -> some View {

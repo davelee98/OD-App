@@ -18,6 +18,7 @@
 		010000000000000000000008 /* ODConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000008 /* ODConfig.swift */; };
 		01000000000000000000000C /* BLETesterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000C /* BLETesterView.swift */; };
 		01000000000000000000000D /* DeviceRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000D /* DeviceRowView.swift */; };
+		0100000000000000000000D7 /* UnlockDisplayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200000000000000000000D7 /* UnlockDisplayView.swift */; };
 		01000000000000000000000E /* ConfigModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000E /* ConfigModel.swift */; };
 		010000000000000000000010 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000010 /* CoreBluetooth.framework */; };
 		010000000000000000000011 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000011 /* Security.framework */; };
@@ -90,6 +91,7 @@
 		020000000000000000000008 /* ODConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ODConfig.swift; sourceTree = "<group>"; };
 		02000000000000000000000C /* BLETesterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLETesterView.swift; sourceTree = "<group>"; };
 		02000000000000000000000D /* DeviceRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceRowView.swift; sourceTree = "<group>"; };
+		0200000000000000000000D7 /* UnlockDisplayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnlockDisplayView.swift; sourceTree = "<group>"; };
 		02000000000000000000000E /* ConfigModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigModel.swift; sourceTree = "<group>"; };
 		020000000000000000000010 /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = System/Library/Frameworks/CoreBluetooth.framework; sourceTree = SDKROOT; };
 		020000000000000000000011 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
@@ -234,6 +236,7 @@
 			isa = PBXGroup;
 			children = (
 				02000000000000000000000D /* DeviceRowView.swift */,
+				0200000000000000000000D7 /* UnlockDisplayView.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -481,6 +484,7 @@
 				010000000000000000000008 /* ODConfig.swift in Sources */,
 				01000000000000000000000C /* BLETesterView.swift in Sources */,
 				01000000000000000000000D /* DeviceRowView.swift in Sources */,
+				0100000000000000000000D7 /* UnlockDisplayView.swift in Sources */,
 				01000000000000000000000E /* ConfigModel.swift in Sources */,
 				010000000000000000000054 /* AdvancedSettingsView.swift in Sources */,
 				010000000000000000000021 /* ImageProcessor.swift in Sources */,

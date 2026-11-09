@@ -15,8 +15,31 @@ public enum ODProtocolError: Error, Equatable {
     case deviceRejected(opcode: UInt16, code: UInt8?)   // an FF <opcode> [err] notification
     case authRequired                  // 0x..FE
     case authFailed(String)            // handshake rejected, or device's mutual-auth proof mismatched
+    case encryptionNotConfigured       // 0x50 answered NOT_CONFIG: the device has no key at all
     case malformedResponse(String)
     case sizeMismatch(expected: Int, actual: Int)
+}
+
+extension ODProtocolError: LocalizedError {
+    /// User-facing text. Without this, SwiftUI surfaces the bridged default
+    /// ("The operation couldn't be completed. (ODProtocolKit.ODProtocolError error 5.)").
+    public var errorDescription: String? {
+        switch self {
+        case .busy: return "Another operation is still running on the display."
+        case .notConnected: return "The display is not connected."
+        case .disconnected: return "The display disconnected."
+        case .timeout(let operation): return "The display stopped responding (\(operation))."
+        case .deviceRejected(let opcode, let code):
+            let detail = code.map { String(format: ", code 0x%02X", $0) } ?? ""
+            return String(format: "The display rejected command 0x%04X", opcode) + detail + "."
+        case .authRequired: return "This display is encrypted. Enter its key to continue."
+        case .authFailed(let reason): return "Authentication failed: \(reason)."
+        case .encryptionNotConfigured: return "This display has no encryption key configured."
+        case .malformedResponse(let what): return "The display sent an unexpected response (\(what))."
+        case .sizeMismatch(let expected, let actual):
+            return "Image size mismatch: expected \(expected) bytes, got \(actual)."
+        }
+    }
 }
 
 /// High-level events the client surfaces out-of-band (not tied to a specific awaited call).

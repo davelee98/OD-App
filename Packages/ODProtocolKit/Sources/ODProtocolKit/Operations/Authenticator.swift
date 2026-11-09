@@ -72,9 +72,9 @@ struct Authenticator {
     private static func throwIfStatusBad(_ status: UInt8, stage: String) throws {
         switch status {
         case AUTH_STATUS_SUCCESS, AUTH_STATUS_ALREADY: return
-        case AUTH_STATUS_FAILED:     throw ODProtocolError.authFailed("\(stage): wrong key")
-        case AUTH_STATUS_NOT_CONFIG: throw ODProtocolError.authFailed("\(stage): encryption not configured on device")
-        case AUTH_STATUS_RATE_LIMIT: throw ODProtocolError.authFailed("\(stage): rate limited (too many attempts)")
+        case AUTH_STATUS_FAILED:     throw ODProtocolError.authFailed("wrong key")
+        case AUTH_STATUS_NOT_CONFIG: throw ODProtocolError.encryptionNotConfigured
+        case AUTH_STATUS_RATE_LIMIT: throw ODProtocolError.authFailed("too many attempts, wait a moment and try again")
         default:                     throw ODProtocolError.authFailed("\(stage): device error 0x\(String(status, radix: 16))")
         }
     }
