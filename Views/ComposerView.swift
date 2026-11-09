@@ -102,6 +102,8 @@ struct ComposerView: View {
     @State private var ditheringOverridden = false
     // Render against the panel's measured ink colors (enables tone compression). Off = idealized palette.
     @State private var useMeasuredPalette = false
+    // DBS refinement after diffusion. Remembered across sessions: it's a quality/speed preference.
+    @AppStorage("ditherRefinementDBS") private var refineDithering = false
 
     // Preview.
     @State private var previewImage: UIImage?
@@ -753,6 +755,12 @@ struct ComposerView: View {
                 .pickerStyle(.menu)
                 .onChange(of: dithering) { _, _ in ditheringOverridden = true }
             }
+
+            Toggle(isOn: $refineDithering) {
+                Label("Refine (DBS)", systemImage: "wand.and.stars").font(.caption)
+            }
+            Text("Optimizes the dithered pixels for how the eye sees the panel at about 40 cm. Better tone and color, especially on multi-color panels; preview and send take longer.")
+                .font(.caption2).foregroundStyle(.secondary)
             Text("Defaults are chosen for this panel's palette. Atkinson suits black-and-white e-ink; Floyd-Steinberg suits multi-color.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
@@ -1137,6 +1145,14 @@ struct ComposerView: View {
         selection = nil
     }
 
+    /// DBS settings for the panel being drawn, or nil when refinement is off. Uses the panel's
+    /// real pixel density from its config (`active_width_mm`) when known, else the core default.
+    private var ditherRefinement: RustDither.Refinement? {
+        guard refineDithering else { return nil }
+        return .forPanel(pixelWidth: device?.config?.displayWidth ?? 0,
+                         activeWidthMM: device?.config?.displayWidthMM ?? 0)
+    }
+
     private func generatePreview() {
         refreshCanvasImage()
         showPreview = true
@@ -1148,12 +1164,14 @@ struct ComposerView: View {
         let dith = dithering
         let measured = useMeasuredPalette
         let tone = Double(adjustments.toneCompression)
+        let refinement = ditherRefinement
         let snapshot = compositeSnapshot()
         DispatchQueue.global(qos: .userInitiated).async {
             let composite = Self.renderComposite(snapshot)
             let preview = ImageProcessor.preview(image: composite, width: w, height: h,
                                                  colorScheme: scheme, dithering: dith,
-                                                 useMeasuredPalette: measured, toneCompression: tone)
+                                                 useMeasuredPalette: measured, toneCompression: tone,
+                                                 refinement: refinement)
             DispatchQueue.main.async { self.previewImage = preview }
         }
     }
@@ -1176,6 +1194,7 @@ struct ComposerView: View {
         let dith = dithering
         let measured = useMeasuredPalette
         let tone = Double(adjustments.toneCompression)
+        let refinement = ditherRefinement
         let snapshot = compositeSnapshot()   // capture @State on the main thread
         DispatchQueue.global(qos: .userInitiated).async {
             let composite = Self.renderComposite(snapshot)
@@ -1183,7 +1202,8 @@ struct ComposerView: View {
             DispatchQueue.main.async { sendCompositeImage = composite }
             guard let result = ImageProcessor.processWithPreview(image: composite, width: w, height: h,
                                                                 colorScheme: scheme, dithering: dith,
-                                                                useMeasuredPalette: measured, toneCompression: tone) else {
+                                                                useMeasuredPalette: measured, toneCompression: tone,
+                                                                refinement: refinement) else {
                 DispatchQueue.main.async {
                     device.failUpload("Could not render the image for this display's color scheme.")
                 }
