@@ -2,6 +2,7 @@ import Foundation
 import CoreBluetooth
 import Combine
 import os
+import ODProtocolKit
 
 final class BLEManager: NSObject, ObservableObject {
     @Published var bluetoothState: CBManagerState = .unknown
@@ -26,6 +27,9 @@ final class BLEManager: NSObject, ObservableObject {
     private var reconnectingPeripheral: CBPeripheral?
     /// A scan requested before Core Bluetooth reached `.poweredOn`; started once it powers on.
     private var pendingScan = false
+    /// A display named by a scanned QR code, connected to as soon as it advertises.
+    @Published private(set) var pendingLink: ODLandingLink?
+    private var linkSearchTimeout: DispatchWorkItem?
 
     override init() {
         super.init()
@@ -69,6 +73,7 @@ final class BLEManager: NSObject, ObservableObject {
         pendingReconnectID = nil
         reconnectingPeripheral = nil
         pendingScan = false
+        cancelLinkSearch()
     }
 
     // MARK: - Scanning
@@ -135,6 +140,53 @@ final class BLEManager: NSObject, ObservableObject {
             discoveredDevices[idx].connectionState = .connecting
         }
         centralManager?.connect(discovered.peripheral, options: nil)
+    }
+
+    /// Connect to the display named in a scanned QR code. The QR carries the device name and (when
+    /// the display shows it) its key, so this skips both the device picker and key entry. A BLE name
+    /// isn't a CoreBluetooth identifier, so we still scan for it; the key is saved against the
+    /// matching peripheral just before connecting, and `ODDevice` authenticates with it on connect.
+    func connect(to link: ODLandingLink) {
+        connectionError = nil
+        pendingLink = link
+        trace("QR connect requested for \(link.deviceName); key=\(link.encryptionKey == nil ? "none" : "present")", level: .info)
+        if let match = discoveredDevices.first(where: { matches(link, name: $0.name, localName: $0.localName) }) {
+            connectPending(link, to: match.peripheral)
+            return
+        }
+        startScan()
+        linkSearchTimeout?.cancel()
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self, self.pendingLink == link else { return }
+            self.cancelLinkSearch()
+            self.stopScan()
+            self.connectionError = "Couldn't find \(link.deviceName). Make sure it's awake and nearby, then scan again."
+        }
+        linkSearchTimeout = timeout
+        // The display may be between advertising windows (deep sleep), so allow a few of them.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 25, execute: timeout)
+    }
+
+    func cancelLinkSearch() {
+        linkSearchTimeout?.cancel()
+        linkSearchTimeout = nil
+        pendingLink = nil
+    }
+
+    private func matches(_ link: ODLandingLink, name: String?, localName: String?) -> Bool {
+        [name, localName].compactMap { $0 }.contains { $0.caseInsensitiveCompare(link.deviceName) == .orderedSame }
+    }
+
+    private func connectPending(_ link: ODLandingLink, to peripheral: CBPeripheral) {
+        cancelLinkSearch()
+        if let key = link.encryptionKey {
+            ODAuth.savePSK(key, forDevice: peripheral.identifier.uuidString)
+        }
+        trace("QR connect: found \(link.deviceName) as \(peripheral.identifier.uuidString)", level: .info)
+        if let idx = discoveredDevices.firstIndex(where: { $0.id == peripheral.identifier }) {
+            discoveredDevices[idx].connectionState = .connecting
+        }
+        connect(peripheral: peripheral)
     }
 
     func disconnect() {
@@ -233,6 +285,10 @@ extension BLEManager: CBCentralManagerDelegate {
             return
         }
         let localName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
+        if let link = pendingLink, matches(link, name: peripheral.name, localName: localName) {
+            connectPending(link, to: peripheral)
+            return
+        }
         let msd = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
         var serviceUUIDs = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? []
         serviceUUIDs += advertisementData[CBAdvertisementDataOverflowServiceUUIDsKey] as? [CBUUID] ?? []

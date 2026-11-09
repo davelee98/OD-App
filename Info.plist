@@ -22,6 +22,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSCameraUsageDescription</key>
+	<string>OpenDisplay uses the camera to scan the QR code shown on your display, which contains its name and encryption key.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>OpenDisplay uses Bluetooth to discover and communicate with OpenDisplay devices.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>

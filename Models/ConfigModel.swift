@@ -102,6 +102,24 @@ struct ODConfigModel: Equatable {
         }
     }
 
+    /// Whether the security packet turns application-layer encryption on. A zero key disables it
+    /// regardless of the flag (config.yaml: "If all zeros, encryption is disabled").
+    var encryptionEnabled: Bool {
+        guard let flag = value(.security, field: "encryption_enabled") else { return false }
+        let trimmed = flag.lowercased().hasPrefix("0x") ? String(flag.dropFirst(2)) : flag
+        guard (Int(trimmed) ?? Int(trimmed, radix: 16) ?? 0) != 0 else { return false }
+        return configuredMasterKey.map { !$0.allSatisfy { $0 == 0 } } ?? true
+    }
+
+    /// The master key as stored in the config, when it decodes to 16 bytes. Current firmware never
+    /// lets this be read without a session, but older firmware answers the config read
+    /// unauthenticated and still silently ignores image writes until the 0x50 handshake has run.
+    var configuredMasterKey: Data? {
+        guard let hex = value(.security, field: "encryption_key"),
+              case .key(let key)? = ODKeyEntry.parse(hex) else { return nil }
+        return key
+    }
+
     private func value(_ type: ConfigPacketType, field: String) -> String? {
         toolbox.packets.first(where: { $0.packetType == Int(type.rawValue) })?.fields[field]
     }

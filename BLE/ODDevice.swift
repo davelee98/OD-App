@@ -15,6 +15,10 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     @Published var advertisementError: String?
     @Published var isReadingAdvertisement = false
     @Published var isAuthenticated = false
+    /// Non-nil while the display is encrypted and waiting on a key the app doesn't have (or that it
+    /// refused). Drives the unlock prompt on every surface; cleared by a successful `unlock(with:)`.
+    @Published private(set) var keyPrompt: KeyPrompt?
+    @Published private(set) var isUnlocking = false
     @Published var config: ODConfigModel?
     @Published var configReadProgress: Double = 0
     @Published var configReadState: ConfigReadState = .unread
@@ -24,6 +28,14 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// "read from hardware", and "read failed" instead of treating a nil `config` as all three.
     /// A loaded `config` alongside `.reading` means a cached value is being refreshed on reconnect.
     enum ConfigReadState: Equatable { case unread, reading, loaded, failed(String) }
+
+    /// Why the display needs a key from the user.
+    enum KeyPrompt: Equatable {
+        /// The display answered "auth required" and no key is saved for it.
+        case missing
+        /// A saved, typed or scanned key was refused (wrong key, rate limited, …).
+        case rejected(String)
+    }
 
     /// The lifecycle of an image send, driving the Composer's status overlay. This is the single
     /// source of truth — `isUploading` is derived from it, so there is exactly one writer.
@@ -192,6 +204,8 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         runtime?.setConnected(false)
         connectionState = .disconnected
         isAuthenticated = false
+        keyPrompt = nil
+        isUnlocking = false
         if uploadPhase == .sending { failUpload("The display disconnected during upload.") }
         uploadTask?.cancel(); uploadTask = nil
         MainActor.assumeIsolated { self.nativeLink.linkDropped(nil) }   // fail any pending native upload
@@ -233,7 +247,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // stayed nil until a surface re-triggered it). Config is the critical path (it gates the
             // Composer/Add/Toolbox), so read it first, then read the cosmetic firmware version once
             // the gate frees. The firmware read runs on both success and failure of the config read.
-            self.readConfig { [weak self] _ in self?.readFirmware() }
+            self.startSession()
         }
         transport.onNotification = { [weak self] data in
             guard let self else { return }
@@ -414,6 +428,15 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if let completion { configReadCompletions.append(completion) }
             return
         }
+        if keyPrompt != nil, !isAuthenticated {
+            // Locked and still waiting on a key: every gated command would just bounce with
+            // AUTH_REQUIRED (and the firmware drops the link after a run of those), so don't go to
+            // the wire. `unlock(with:)` re-reads once a session exists.
+            trace("readConfig skipped; display is locked and waiting for a key", level: .info)
+            configReadState = .failed(ODProtocolError.authRequired.localizedDescription)
+            completion?(.failure(ODProtocolError.authRequired))
+            return
+        }
         configReadState = .reading
         configReadProgress = 0
         if let completion { configReadCompletions.append(completion) }
@@ -449,9 +472,16 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                                "display=\(model.displayWidth)x\(model.displayHeight) colorScheme=\(model.colorScheme)")
                     self.reparseAdvertisement()
                     finish(.success(model))
+                    self.authenticateIfConfigRequires(model)
                 } catch {
                     guard !didComplete else { return }
-                    self.lastError = "Configuration read failed: \(error.localizedDescription)"
+                    if case ODProtocolError.authRequired = error {
+                        // Not an error to banner: the unlock prompt is the answer.
+                        self.trace("readConfig (native): display requires authentication", level: .info)
+                        if self.keyPrompt == nil { self.keyPrompt = .missing }
+                    } else {
+                        self.lastError = "Configuration read failed: \(error.localizedDescription)"
+                    }
                     self.configReadProgress = 0
                     finish(.failure(error))
                 }
@@ -662,12 +692,83 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - Authentication
 
-    func authenticate(psk: Data) {
-        guard psk.count == 16 else {
-            lastError = "Authentication key must contain exactly 16 bytes"
+    /// Connect-time sequence. Current firmware gates every command except the 0x50 handshake and
+    /// the firmware-version read behind a session — config read included — so with a saved key we
+    /// authenticate *first*. Reading config first (as this used to) just bounced off the gate and
+    /// left an encrypted display unusable until the user found the Toolbox's Authenticate button.
+    private func startSession() {
+        guard let key = psk else {
+            readConfig { [weak self] _ in self?.readFirmware() }
             return
         }
+        trace("saved key found; authenticating before the config read", level: .info)
+        isUnlocking = true
+        performAuthentication(key) { [weak self] result in
+            guard let self else { return }
+            self.isUnlocking = false
+            switch result {
+            case .success:
+                self.readConfig { [weak self] _ in self?.readFirmware() }
+            case .failure(ODProtocolError.encryptionNotConfigured):
+                // Encryption was turned off since the key was saved: the key is stale, not wrong.
+                self.trace("display has no encryption configured; discarding the stale saved key", level: .info)
+                self.psk = nil
+                self.readConfig { [weak self] _ in self?.readFirmware() }
+            case .failure(let error):
+                // Don't delete the saved key on a refusal: a rate-limit or a flaky link looks the
+                // same from here, and the user can replace it from the prompt.
+                self.keyPrompt = .rejected(error.localizedDescription)
+                self.configReadState = .failed(error.localizedDescription)
+                self.readFirmware()
+            }
+        }
+    }
 
+    /// Older firmware answers the config read without a session but drops image writes until the
+    /// handshake has run — no rejection is sent, so it looks like a dead link. If the config says
+    /// encryption is on and there's no session yet, authenticate now: with the key the config
+    /// itself carries (older firmware serves it), otherwise by asking the user.
+    private func authenticateIfConfigRequires(_ model: ODConfigModel) {
+        guard model.encryptionEnabled, !isAuthenticated, !isUnlocking else { return }
+        if let key = model.configuredMasterKey {
+            trace("config reports encryption on; authenticating with the key it carries", level: .info)
+            unlock(with: key)
+        } else if keyPrompt == nil {
+            keyPrompt = .missing
+        }
+    }
+
+    /// Authenticate with `key` (typed, pasted or scanned). On success the key is saved for this
+    /// display, the prompt clears, and the configuration is re-read under the new session.
+    func unlock(with key: Data) {
+        guard key.count == 16 else {
+            keyPrompt = .rejected("The key must be 16 bytes (32 hex characters).")
+            return
+        }
+        guard !isUnlocking else { return }
+        isUnlocking = true
+        performAuthentication(key) { [weak self] result in
+            guard let self else { return }
+            self.isUnlocking = false
+            switch result {
+            case .success:
+                self.psk = key
+                self.keyPrompt = nil
+                self.lastError = nil
+                if self.configReadState != .loaded { self.readConfig() }
+            case .failure(ODProtocolError.encryptionNotConfigured):
+                self.keyPrompt = nil
+                if self.configReadState != .loaded { self.readConfig() }
+            case .failure(let error):
+                self.keyPrompt = .rejected(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Back-compat entry point (Toolbox). Same as `unlock(with:)`.
+    func authenticate(psk: Data) { unlock(with: psk) }
+
+    private func performAuthentication(_ psk: Data, completion: @escaping (Result<Void, Error>) -> Void) {
         if useNativeProtocol {
             // Native 0x50 handshake; the client owns the timeout and, on success, transparently
             // CCM-wraps all subsequent traffic (config/upload/commands already route through it).
@@ -676,10 +777,12 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 do {
                     try await self.protocolClient.authenticate(masterKey: psk)
                     self.isAuthenticated = true
+                    self.trace("authenticated; session encryption active", level: .info)
+                    completion(.success(()))
                 } catch {
                     self.isAuthenticated = false
-                    self.lastError = error.localizedDescription
                     self.trace("authenticate (native) failed: \(error.localizedDescription)", level: .error)
+                    completion(.failure(error))
                 }
             }
             return
@@ -691,7 +794,7 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             guard !didComplete else { return }
             didComplete = true
             self?.isAuthenticated = false
-            self?.lastError = "Authentication timed out. The device did not respond."
+            completion(.failure(ODDeviceError("Authentication timed out. The device did not respond.")))
         }
         call("authenticate", arguments: ["keyHex": psk.hexString.replacingOccurrences(of: " ", with: "")]) {
             [weak self] result in
@@ -700,10 +803,12 @@ final class ODDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             guard !didComplete else { return }
             didComplete = true
             switch result {
-            case .success: self?.isAuthenticated = true
+            case .success:
+                self?.isAuthenticated = true
+                completion(.success(()))
             case .failure(let error):
                 self?.isAuthenticated = false
-                self?.lastError = error.localizedDescription
+                completion(.failure(error))
             }
         }
     }
