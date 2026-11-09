@@ -101,7 +101,8 @@ enum ImageProcessor {
 
     static func preview(image: UIImage, width: Int, height: Int,
                         colorScheme: UInt8, dithering: DitheringMode,
-                        useMeasuredPalette: Bool = false, toneCompression: Double = 0) -> UIImage? {
+                        useMeasuredPalette: Bool = false, toneCompression: Double = 0,
+                        refinement: RustDither.Refinement? = nil) -> UIImage? {
         guard let cgImage = image.cgImage else { return nil }
         let palette = (useMeasuredPalette ? measuredPalettes[colorScheme] : nil)
                     ?? palettes[colorScheme] ?? palettes[0]!
@@ -110,7 +111,8 @@ enum ImageProcessor {
         if useMeasuredPalette {
             compressDynamicRange(&floatPixels, colorScheme: colorScheme, strength: toneCompression)
         }
-        guard let indexed = ditherIndices(floatPixels, width: width, height: height, palette: palette, mode: dithering) else { return nil }
+        guard let indexed = ditherIndices(floatPixels, width: width, height: height, palette: palette,
+                                          mode: dithering, refinement: refinement) else { return nil }
         // Map indices back to palette RGB and write into pixels
         for i in 0..<(width * height) {
             let (r, g, b) = palette[indexed[i]]
@@ -127,7 +129,8 @@ enum ImageProcessor {
     /// without paying for the dither twice. Equivalent to calling `process` and `preview` back to back.
     static func processWithPreview(image: UIImage, width: Int, height: Int,
                                    colorScheme: UInt8, dithering: DitheringMode,
-                                   useMeasuredPalette: Bool = false, toneCompression: Double = 0)
+                                   useMeasuredPalette: Bool = false, toneCompression: Double = 0,
+                                   refinement: RustDither.Refinement? = nil)
         -> (packed: Data, preview: UIImage)? {
         guard let cgImage = image.cgImage else { return nil }
         let palette = (useMeasuredPalette ? measuredPalettes[colorScheme] : nil)
@@ -140,7 +143,8 @@ enum ImageProcessor {
         if useMeasuredPalette {
             compressDynamicRange(&floatPixels, colorScheme: colorScheme, strength: toneCompression)
         }
-        guard let indexed = ditherIndices(floatPixels, width: width, height: height, palette: palette, mode: dithering) else { return nil }
+        guard let indexed = ditherIndices(floatPixels, width: width, height: height, palette: palette,
+                                          mode: dithering, refinement: refinement) else { return nil }
 
         let packed = pack(indexed, scheme: colorScheme, width: width, height: height)
 
@@ -328,7 +332,8 @@ enum ImageProcessor {
     /// substituting it would reintroduce the exact drift this replaced. A failure is logged and
     /// propagated as `nil` (callers return `nil` / no image) rather than shipping wrong pixels.
     private static func ditherIndices(_ pixels: [Float], width: Int, height: Int,
-                                      palette: [RGB], mode: DitheringMode) -> [Int]? {
+                                      palette: [RGB], mode: DitheringMode,
+                                      refinement: RustDither.Refinement?) -> [Int]? {
         let n = width * height
         // Interleaved float sRGB (0-255) → clamped/rounded UInt8 RGB.
         var rgb = [UInt8](repeating: 0, count: n * 3)
@@ -343,8 +348,15 @@ enum ImageProcessor {
             palBytes[i * 3 + 2] = UInt8(min(max(c.b.rounded(), 0), 255))
         }
         do {
+            let start = DispatchTime.now()
             let idx = try RustDither.dither(rgb: rgb, width: width, height: height,
-                                            palette: palBytes, mode: mode)
+                                            palette: palBytes, mode: mode, refinement: refinement)
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+            if let refinement {
+                ODLog.imaging.info("dither \(width)x\(height) \(mode.rawValue, privacy: .public) + DBS (≤\(refinement.maxPasses) passes, \(refinement.viewingDistanceCm, format: .fixed(precision: 0)) cm, \(refinement.ppi, format: .fixed(precision: 1)) ppi): \(ms, format: .fixed(precision: 0)) ms")
+            } else {
+                ODLog.imaging.debug("dither \(width)x\(height) \(mode.rawValue, privacy: .public): \(ms, format: .fixed(precision: 0)) ms")
+            }
             return idx.map { Int($0) }
         } catch {
             ODLog.imaging.error("RustDither failed: \(String(describing: error), privacy: .public)")

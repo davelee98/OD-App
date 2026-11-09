@@ -11,7 +11,7 @@ dithered output is now byte-for-byte identical to the website / Python / firmwar
 `epaper-dithering` repo:
 
 - Source crate: `epaper-dithering/packages/rust/ios`
-- Core version at last sync: **epaper-dithering-core 4.0.1**
+- Core version at last sync: **epaper-dithering-core 6.0.0** (FFI ABI 2: options struct + DBS)
 - Slices: `ios-arm64` (device) + `ios-arm64_x86_64-simulator` (arm64 + x86_64)
 
 ### Regenerating / updating

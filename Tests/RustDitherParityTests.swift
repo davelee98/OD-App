@@ -59,4 +59,42 @@ final class RustDitherParityTests: XCTestCase {
         )
         XCTAssertEqual(indices, [UInt8](repeating: 2, count: w * h))
     }
+
+    /// The vendored framework must be the options-struct ABI this wrapper calls.
+    func testFrameworkABIVersion() {
+        XCTAssertEqual(RustDither.abiVersion, 2)
+    }
+
+    /// DBS through the app wrapper: valid indices, different from plain diffusion, and
+    /// deterministic (same input → same output, despite the core's parallel tiles).
+    func testRefinementChangesOutputDeterministically() throws {
+        let w = 48, h = 32
+        var rgb = [UInt8](); rgb.reserveCapacity(w * h * 3)
+        for y in 0..<h { for x in 0..<w {
+            let v = UInt8((x + y) * 255 / (w + h - 2))
+            rgb += [v, v / 2, 255 - v]
+        } }
+        let palette: [UInt8] = [0, 0, 0, 255, 255, 255, 255, 0, 0] // black, white, red
+        let refinement = RustDither.Refinement.coreDefault
+        let plain = try RustDither.dither(rgb: rgb, width: w, height: h, palette: palette, mode: .burkes)
+        let refined = try RustDither.dither(rgb: rgb, width: w, height: h, palette: palette,
+                                            mode: .burkes, refinement: refinement)
+        let again = try RustDither.dither(rgb: rgb, width: w, height: h, palette: palette,
+                                          mode: .burkes, refinement: refinement)
+        XCTAssertEqual(refined.count, w * h)
+        XCTAssertTrue(refined.allSatisfy { $0 < 3 })
+        XCTAssertNotEqual(refined, plain)
+        XCTAssertEqual(refined, again)
+    }
+
+    func testRefinementDefaultsAndPanelPPI() {
+        let d = RustDither.Refinement.coreDefault
+        XCTAssertGreaterThan(d.maxPasses, 0)
+        XCTAssertGreaterThan(d.viewingDistanceCm, 0)
+        XCTAssertGreaterThan(d.ppi, 0)
+        // 800 px across 163 mm (7.3" panel) ≈ 124.7 ppi.
+        XCTAssertEqual(RustDither.Refinement.panelPPI(pixelWidth: 800, activeWidthMM: 163) ?? 0, 124.66, accuracy: 0.01)
+        XCTAssertNil(RustDither.Refinement.panelPPI(pixelWidth: 800, activeWidthMM: 0))
+        XCTAssertEqual(RustDither.Refinement.forPanel(pixelWidth: 800, activeWidthMM: 0).ppi, d.ppi)
+    }
 }
