@@ -1,0 +1,4 @@
+# Written by scripts/sync-dither-xcframework.sh — do not edit by hand.
+source=https://github.com/OpenDisplay/epaper-dithering/releases/tag/epaper-dithering-ios-v1.0.1
+release=1.0.1
+checksum=64bf7014736527453604da53af3cb405f96709b73fc2409768d0b06d15896763
